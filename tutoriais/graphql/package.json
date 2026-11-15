@@ -1,0 +1,17 @@
+{
+  "name": "leman-graphql",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Servidor GraphQL da Plataforma de Cursos Leman",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test:graphql": "node test-graphql.js"
+  },
+  "dependencies": {
+    "@apollo/server": "^5.0.0",
+    "dataloader": "^2.2.3",
+    "dotenv": "^16.4.7",
+    "graphql": "^16.11.0"
+  }
+}
