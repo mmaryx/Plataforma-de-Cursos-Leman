@@ -1,4 +1,3 @@
-
 # Plataforma de Cursos Leman
 
 Projeto acadêmico do Grupo 02 da Fatec Bauru, desenvolvido na disciplina **Modelagem de Padrões de Projeto**, como parte do projeto Fio-Condutor.
@@ -35,7 +34,7 @@ O acompanhamento de progresso e a disponibilização de aulas/conteúdos fazem p
 ## 3. Estrutura da entrega
 
 ```text
-plataforma-cursos-leman/
+Plataforma-de-Cursos-Leman/
 ├── documentacao/
 │   ├── oficina-1/
 │   ├── oficina-2/
@@ -44,17 +43,20 @@ plataforma-cursos-leman/
 ├── tutoriais/
 │   ├── README.md
 │   ├── compose.yaml
+│   ├── openapi.yaml
 │   ├── rest/
 │   ├── mensageria/
 │   ├── graphql/
 │   ├── gateway/
 │   └── testes/
 ├── 00-indice.pdf
+├── relatorio-tutoriais.pdf
+├── apresentacao.pdf
 ├── README.md
 └── .gitignore
 ```
 
-Os arquivos de cada serviço, seus scripts e dependências estão descritos em [`tutoriais/README.md`](tutoriais/README.md).
+Os arquivos de cada serviço, seus scripts, chaves fictícias e instruções de execução estão descritos em [`tutoriais/README.md`](tutoriais/README.md).
 
 ## 4. Portas
 
@@ -103,29 +105,19 @@ Consulte [`tutoriais/README.md`](tutoriais/README.md) para pré-requisitos, vari
 | Integrante | Responsabilidades |
 |---|---|
 | **Marianna Ghiraldelli** | API REST; `README.md` geral; `tutoriais/README.md`; `00-indice.pdf`; preparação dos testes individuais de REST, mensageria, GraphQL e Gateway; organização final das pastas e ZIP de entrega. |
-| **Antônio Campello** | GraphQL; RabbitMQ; apoio/revisão e execução dos testes individuais das quatro etapas; hospedagem em nuvem (atividade extra). |
+| **Antônio Campello** | GraphQL; RabbitMQ; revisão e execução dos testes ponta a ponta das quatro etapas; hospedagem e validação em nuvem (AWS). |
 | **Eduardo Galvão** | Documentação do projeto Fio-Condutor; `relatorio-tutoriais.pdf`; `apresentacao.pdf`. |
 | **João Napoleone** | API Gateway. |
 | **Lucas Jerônimo** | Integração entre mensageria e API REST; `compose.yaml`; instruções de execução. |
 
-### Atividades compartilhadas e pendentes de validação
-
-- **Todos:** revisar os commits e participar da criação/conferência das tags `etapa-1-rest`, `etapa-2-mensageria`, `etapa-3-graphql` e `etapa-4-gateway`.
-- **Todos:** validar o teste de integração e ensaiar a demonstração do fluxo completo.
-- **A definir no grupo:** responsável por consolidar o teste ponta a ponta e registrar evidências da execução.
-- **A definir no grupo:** responsável por revisar o `openapi.yaml` e confirmar que corresponde aos endpoints REST implementados.
-- **A definir no grupo:** confirmar que os diagramas de arquitetura e as referências ABNT estão no relatório e na apresentação.
-
-A hospedagem em nuvem é uma atividade extra e não deve comprometer os requisitos obrigatórios da entrega.
-
 ## 9. Uso de Inteligência Artificial
 
-Ferramentas de IA foram utilizadas como apoio à compreensão de conceitos, revisão e depuração de código, elaboração de testes e organização da documentação. O grupo deve revisar o conteúdo produzido, validar os resultados no ambiente de execução e ser capaz de explicar as decisões e o código apresentados.
+Ferramentas de Inteligência Artificial (**Google Gemini** e **OpenAI ChatGPT**) foram utilizadas como apoio à compreensão de conceitos técnicos (RFC 9457, AMQP 0-9-1, Apollo Server 5), revisão e depuração de código, estruturação de testes automatizados e revisão da documentação. Todo o código e os resultados foram validados pelos integrantes do grupo no ambiente de execução.
 
 ## 10. Repositório e vídeo
 
-- Repositório Git: **inserir URL real antes da entrega**.
-- Vídeo de demonstração: **inserir URL real, se houver**.
+- **Repositório Git:** https://github.com/mmaryx/Plataforma-de-Cursos-Leman
+- **Vídeo de demonstração (Plano B):** *[Inserir link após a gravação do ensaio]*
 
 ## 11. Referências
 
