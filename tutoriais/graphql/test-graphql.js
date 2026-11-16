@@ -1,3 +1,4 @@
+
 import { randomUUID } from 'node:crypto';
 
 const GRAPHQL_URL = process.env.GRAPHQL_URL || 'http://127.0.0.1:4000/';
@@ -16,10 +17,13 @@ async function executarGraphQL(query, variables = {}, requestId = randomUUID()) 
     return { status: resposta.status, requestId, ...json };
 }
 
-async function rodarDemonstracao() {
-    console.log('\n=== TESTE DO SERVIDOR GRAPHQL - PLATAFORMA LEMAN ===\n');
+function afirmar(condicao, mensagem) {
+    if (!condicao) throw new Error(mensagem);
+}
 
-    // 1. Tela real: Painel do Catálogo (1 requisição GraphQL substituindo N+2 chamadas REST)
+async function rodarDemonstracao() {
+    console.log('\n=== TESTES GRAPHQL - PLATAFORMA LEMAN ===\n');
+
     const queryPainel = `
       query TelaPainelCoordenacao {
         painelCatalogo {
@@ -36,9 +40,7 @@ async function rodarDemonstracao() {
               aluno
               email
               status
-              curso {
-                titulo
-              }
+              curso { titulo }
             }
           }
         }
@@ -46,85 +48,93 @@ async function rodarDemonstracao() {
     `;
 
     const resPainel = await executarGraphQL(queryPainel);
-    if (resPainel.errors) {
-        throw new Error(`Falha na consulta do painel: ${JSON.stringify(resPainel.errors)}`);
-    }
+
+    afirmar(resPainel.status === 200, `Painel: HTTP ${resPainel.status}`);
+    afirmar(!resPainel.errors, `Erro no painel: ${JSON.stringify(resPainel.errors)}`);
 
     const painel = resPainel.data.painelCatalogo;
-    const chamadasRestEvitadas = 2 + painel.cursosPublicados.length;
 
-    console.log('1. Consulta TelaPainelCoordenacao (X-Request-Id:', resPainel.requestId, ')');
-    console.log(`   - Cursos publicados: ${painel.totalCursosPublicados}`);
-    console.log(`   - Matrículas ativas: ${painel.totalMatriculasAtivas}`);
-    console.log(
-        `   - Economia de rede: 1 requisição GraphQL substituiu ${chamadasRestEvitadas} chamadas REST individuais!`
-    );
-    console.log(JSON.stringify(painel, null, 2));
+    console.log(`✓ Painel: ${painel.totalCursosPublicados} cursos publicados; ${painel.totalMatriculasAtivas} matrículas ativas.`);
+    console.log(`X-Request-Id: ${resPainel.requestId}`);
 
-    // 2. Consulta com argumentos (filtro)
-    const queryFiltro = `
+    const filtro = await executarGraphQL(`
       query CursosPorCategoria($categoria: String) {
         cursos(categoria: $categoria, status: publicado) {
-          id
-          titulo
-          categoria
-          cargaHoraria
+          id titulo categoria
         }
       }
-    `;
+    `, { categoria: 'Programação' });
 
-    const resFiltro = await executarGraphQL(queryFiltro, { categoria: 'Programação' });
-    console.log('\n2. Consulta com filtro (categoria="Programação"):', resFiltro.data.cursos.length, 'curso(s)');
+    afirmar(filtro.status === 200 && !filtro.errors, `Falha no filtro: ${JSON.stringify(filtro.errors)}`);
+    afirmar(Array.isArray(filtro.data.cursos), 'A query não retornou uma lista.');
 
-    // 3. Mutation: realizar matrícula válida
-    const mutationMatricula = `
+    console.log(`✓ Filtro por categoria: ${filtro.data.cursos.length} curso(s).`);
+
+    const cursos = await executarGraphQL(`
+      query {
+        cursos(status: publicado) {
+          id titulo instrutor
+        }
+      }
+    `);
+
+    afirmar(!cursos.errors, `Falha ao buscar cursos: ${JSON.stringify(cursos.errors)}`);
+
+    const curso = cursos.data.cursos[0];
+
+    afirmar(curso, 'Não há curso publicado. Cadastre um curso antes do teste.');
+
+    const mutation = `
       mutation MatricularAluno($dados: NovaMatriculaInput!) {
         realizarMatricula(dados: $dados) {
-          id
-          aluno
-          email
-          status
-          pagamentoId
-          curso {
-            titulo
-            instrutor
+          id aluno email status pagamentoId curso {
+            titulo instrutor
           }
         }
       }
     `;
 
-    const emailUnico = `aluno.${Date.now()}@leman.edu.br`;
-    const resMutation = await executarGraphQL(mutationMatricula, {
+    const emailUnico = `teste.graphql.${Date.now()}@leman.edu.br`;
+    const requestIdMutation = randomUUID();
+
+    const criada = await executarGraphQL(mutation, {
         dados: {
-            cursoId: 1,
-            aluno: 'Lucas Jerônimo',
+            cursoId: Number(curso.id),
+            aluno: 'Aluno Teste GraphQL',
+            email: emailUnico
+        }
+    }, requestIdMutation);
+
+    afirmar(!criada.errors, `Mutation falhou: ${JSON.stringify(criada.errors)}`);
+    afirmar(criada.data?.realizarMatricula?.id, 'Mutation não retornou matrícula.');
+
+    console.log(`✓ Mutation realizarMatricula: matrícula ${criada.data.realizarMatricula.id}.`);
+    console.log(`X-Request-Id para rastrear: ${requestIdMutation}`);
+
+    const duplicada = await executarGraphQL(mutation, {
+        dados: {
+            cursoId: Number(curso.id),
+            aluno: 'Aluno Teste GraphQL',
             email: emailUnico
         }
     });
 
-    if (resMutation.errors) {
-        throw new Error(`Erro inesperado na mutation: ${JSON.stringify(resMutation.errors)}`);
-    }
+    afirmar(
+        Array.isArray(duplicada.errors) && duplicada.errors.length > 0,
+        'A matrícula duplicada deveria retornar um erro.'
+    );
 
-    console.log('\n3. Mutation realizarMatricula concluída:');
-    console.log(JSON.stringify(resMutation.data.realizarMatricula, null, 2));
+    afirmar(
+        duplicada.errors[0].extensions?.code === 'CONFLICT',
+        `Código esperado CONFLICT, recebido ${duplicada.errors[0].extensions?.code}`
+    );
 
-    // 4. Provocar erro de negócio via GraphQL (matrícula duplicada -> CONFLICT)
-    const resDuplicada = await executarGraphQL(mutationMatricula, {
-        dados: {
-            cursoId: 1,
-            aluno: 'Lucas Jerônimo',
-            email: emailUnico
-        }
-    });
+    console.log('✓ Matrícula duplicada retornou GraphQLError com código CONFLICT.');
 
-    console.log('\n4. Erro de negócio capturado em errors[] (matrícula duplicada):');
-    console.log(JSON.stringify(resDuplicada.errors, null, 2));
-
-    console.log('\n=== TESTES GRAPHQL CONCLUÍDOS COM SUCESSO ===\n');
+    console.log('\n=== TODOS OS TESTES GRAPHQL PASSARAM ===\n');
 }
 
 rodarDemonstracao().catch((erro) => {
-    console.error('\n✗ FALHA NO TESTE GRAPHQL:', erro.message);
+    console.error('\n✗ FALHA NOS TESTES GRAPHQL:', erro);
     process.exitCode = 1;
 });

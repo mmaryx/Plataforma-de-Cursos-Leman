@@ -1,11 +1,41 @@
 
 import express from 'express';
 import pool from './database.js';
+import { randomUUID } from 'node:crypto';
+import { publishEvent } from '../../mensageria/publisher.js';
 
 const app = express();
 const PORT = 3001;
 
 app.use(express.json());
+
+// Propagar ou gerar X-Request-Id
+app.use((req, res, next) => {
+    const requestId = req.headers['x-request-id'] || randomUUID();
+
+    req.requestId = requestId;
+    res.setHeader('X-Request-Id', requestId);
+
+    next();
+});
+
+async function publicarEvento(routingKey, dados, req) {
+    try {
+        await publishEvent(
+            routingKey,
+            dados,
+            { requestId: req.requestId }
+        );
+
+        console.log(
+            `[REST] Evento ${routingKey} publicado | X-Request-Id=${req.requestId}`
+        );
+    } catch (erro) {
+        console.error(
+            `[REST] Falha ao publicar ${routingKey}: ${erro.message} | X-Request-Id=${req.requestId}`
+        );
+    }
+}
 
 // Simulação temporária do Gateway de Pagamento
 async function autorizarPagamentoMock(aluno, curso) {
@@ -130,6 +160,14 @@ app.post('/cursos', async (req, res) => {
             cargaHoraria,
             status
         };
+
+        if (novoCurso.status === 'publicado') {
+            await publicarEvento(
+                'curso.publicado',
+                novoCurso,
+                req
+            );
+        }
 
         return res
             .status(201)
@@ -746,6 +784,12 @@ app.post('/matriculas', async (req, res) => {
             status: 'ativa',
             pagamentoId: pagamento.transacaoId
         };
+
+        await publicarEvento(
+            'matricula.confirmada',
+            novaMatricula,
+            req
+        );
 
         return res
             .status(201)

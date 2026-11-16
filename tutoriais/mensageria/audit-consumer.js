@@ -4,7 +4,10 @@ import {
     FILA_AUDITORIA
 } from './topology.js';
 
-const registrosAuditados = new Set();
+import {
+    eventoJaProcessado,
+    registrarEventoProcessado
+} from './idempotencia.js';
 
 async function iniciar() {
     const conexao = await conectarRabbitMQ();
@@ -37,11 +40,27 @@ async function iniciar() {
 
             const requestId = evento.requestId || headerRequestId;
 
-            if (evento.eventId && registrosAuditados.has(evento.eventId)) {
-                console.log(
-                    `[AUDITORIA] [IDEMPOTÊNCIA] Evento ${evento.eventId} já registrado | X-Request-Id=${requestId}`
-                );
-                return canal.ack(msg);
+            if (evento.eventId) {
+                try {
+                    const jaProcessado = await eventoJaProcessado(
+                        'auditoria',
+                        evento.eventId
+                    );
+
+                    if (jaProcessado) {
+                        console.log(
+                            `[AUDITORIA] [IDEMPOTÊNCIA] Evento ${evento.eventId} já registrado | X-Request-Id=${requestId}`
+                        );
+
+                        return canal.ack(msg);
+                    }
+                } catch (erro) {
+                    console.error(
+                        `[AUDITORIA] Erro ao consultar idempotência: ${erro.message} | X-Request-Id=${requestId}`
+                    );
+
+                    return canal.nack(msg, false, true);
+                }
             }
 
             console.log(
@@ -49,7 +68,18 @@ async function iniciar() {
             );
 
             if (evento.eventId) {
-                registrosAuditados.add(evento.eventId);
+                try {
+                    await registrarEventoProcessado(
+                        'auditoria',
+                        evento.eventId
+                    );
+                } catch (erro) {
+                    console.error(
+                        `[AUDITORIA] Erro ao registrar evento: ${erro.message} | X-Request-Id=${requestId}`
+                    );
+
+                    return canal.nack(msg, false, true);
+                }
             }
 
             canal.ack(msg);
