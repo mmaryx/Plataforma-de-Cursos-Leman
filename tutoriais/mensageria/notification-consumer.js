@@ -5,8 +5,12 @@ import {
     FILA_DLQ
 } from './topology.js';
 
+import {
+    eventoJaProcessado,
+    registrarEventoProcessado
+} from './idempotencia.js';
+
 const MAX_TENTATIVAS = 3;
-const eventosProcessados = new Set(); // Em produção: tabela de idempotência no MySQL
 
 async function enviarEmailNotificacao(evento) {
     const { tipo, dados } = evento;
@@ -70,11 +74,25 @@ async function iniciar() {
             }
 
             // 2. Idempotência: ignora evento já processado com sucesso
-            if (eventosProcessados.has(evento.eventId)) {
-                console.log(
-                    `[NOTIFICACOES] [IDEMPOTÊNCIA] Evento ${evento.eventId} já processado — ignorando duplicata | X-Request-Id=${requestId}`
+            try {
+                const jaProcessado = await eventoJaProcessado(
+                    'notificacoes',
+                    evento.eventId
                 );
-                return canal.ack(msg);
+
+                if (jaProcessado) {
+                    console.log(
+                        `[NOTIFICACOES] [IDEMPOTÊNCIA] Evento ${evento.eventId} já processado — ignorando duplicata | X-Request-Id=${requestId}`
+                    );
+
+                    return canal.ack(msg);
+                }
+            } catch (erro) {
+                console.error(
+                    `[NOTIFICACOES] Erro ao consultar idempotência: ${erro.message} | X-Request-Id=${requestId}`
+                );
+
+                return canal.nack(msg, false, true);
             }
 
             // 3. Processamento com retry limitado e encaminhamento para DLQ
@@ -85,7 +103,11 @@ async function iniciar() {
 
                 await enviarEmailNotificacao(evento);
 
-                eventosProcessados.add(evento.eventId);
+                await registrarEventoProcessado(
+                    'notificacoes',
+                    evento.eventId
+                );
+                
                 canal.ack(msg);
             } catch (erro) {
                 const tentativas = (msg.properties.headers?.['x-tentativas'] ?? 0) + 1;

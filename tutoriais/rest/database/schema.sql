@@ -26,3 +26,12 @@ CREATE TABLE IF NOT EXISTS matriculas (
     CONSTRAINT uk_matricula_ativa
         UNIQUE (curso_id, email, status)
 );
+
+CREATE TABLE IF NOT EXISTS eventos_processados (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    consumidor VARCHAR(50) NOT NULL,
+    event_id VARCHAR(36) NOT NULL,
+    processado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT uk_consumidor_evento UNIQUE (consumidor, event_id)
+);
