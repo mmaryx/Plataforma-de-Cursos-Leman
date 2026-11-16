@@ -1,56 +1,50 @@
+
 # Plataforma de Cursos Leman
 
-Projeto acadêmico desenvolvido pelo Grupo 02 da Fatec Bauru, na disciplina de Modelagem de Padrões de Projeto, como parte do projeto Fio-Condutor.
+Projeto acadêmico do Grupo 02 da Fatec Bauru, desenvolvido na disciplina **Modelagem de Padrões de Projeto**, como parte do projeto Fio-Condutor.
 
-A Plataforma de Cursos Leman é um sistema de educação online que permite o gerenciamento e a disponibilização de cursos e conteúdos educacionais. A plataforma contempla estudantes, instrutores e administradores, oferecendo funcionalidades para matrícula, acesso aos cursos, acompanhamento de progresso e gerenciamento de conteúdos.
+A Plataforma de Cursos Leman é uma solução de educação online. O núcleo implementado nesta entrega contempla o gerenciamento de cursos, o registro de matrículas e a consulta de informações por meio de quatro tecnologias: API REST, mensageria com RabbitMQ, GraphQL e API Gateway.
 
-## 1. Escopo do projeto
+## 1. Escopo implementado
 
-O projeto tem como objetivo implementar uma solução baseada em serviços que permita:
+- Cadastro, consulta, atualização e exclusão de cursos.
+- Consulta e registro de matrículas.
+- Persistência relacional em MySQL.
+- Publicação assíncrona de eventos de negócio.
+- Consumidores independentes para notificações e auditoria.
+- Consultas agregadas por GraphQL, com dados obtidos da API REST.
+- API Gateway como ponto de entrada para REST e GraphQL, com autenticação, limitação de uso e mecanismos de resiliência.
 
-- Gerenciar cursos e seus conteúdos;
-- Realizar e consultar matrículas de estudantes;
-- Acompanhar o progresso dos estudantes;
-- Disponibilizar informações dos cursos;
-- Processar eventos relacionados às operações da plataforma.
+O acompanhamento de progresso e a disponibilização de aulas/conteúdos fazem parte do contexto amplo da plataforma, mas não integram o núcleo implementado nesta entrega.
 
-A implementação será dividida em quatro partes:
+## 2. Tecnologias
 
-- **API REST:** gerenciamento dos recursos e regras de negócio.
-- **Mensageria:** comunicação assíncrona utilizando RabbitMQ.
-- **GraphQL:** consultas agregadas de informações da plataforma.
-- **API Gateway:** ponto único de entrada, autenticação e controle de requisições.
-
-## 2. Tecnologias utilizadas
-
-| Tecnologia | Finalidade |
+| Tecnologia | Uso |
 |---|---|
-| Node.js 22+ | Ambiente de execução |
+| Node.js 22+ | Execução dos serviços |
 | Express 5 | API REST e API Gateway |
-| MySQL 8.4 | Banco de dados relacional |
-| mysql2 | Conexão entre Node.js e MySQL |
-| dotenv | Gerenciamento de variáveis de ambiente |
-| Apollo Server 5 | Servidor GraphQL |
+| MySQL 8.4 | Persistência |
+| mysql2 | Acesso ao MySQL |
 | RabbitMQ 4 | Mensageria |
-| amqplib | Comunicação com RabbitMQ |
-| Docker | Execução dos serviços em contêineres |
+| amqplib | Cliente RabbitMQ |
+| Apollo Server 5 | Servidor GraphQL |
+| GraphQL | Consultas e mutations |
+| DataLoader | Agrupamento/cache por requisição |
+| Docker Compose | Infraestrutura local |
 
-## 3. Estrutura do projeto
+## 3. Estrutura da entrega
 
 ```text
 plataforma-cursos-leman/
 ├── documentacao/
+│   ├── oficina-1/
+│   ├── oficina-2/
+│   ├── oficina-c4-adr/
+│   └── oficina-desenho-decisao/
 ├── tutoriais/
+│   ├── README.md
+│   ├── compose.yaml
 │   ├── rest/
-│   │   ├── database/
-│   │   │   ├── schema.sql
-│   │   │   └── seed.sql
-│   │   ├── src/
-│   │   │   ├── database.js
-│   │   │   └── server.js
-│   │   ├── .env.example
-│   │   ├── package.json
-│   │   └── openapi.yaml
 │   ├── mensageria/
 │   ├── graphql/
 │   ├── gateway/
@@ -60,247 +54,86 @@ plataforma-cursos-leman/
 └── .gitignore
 ```
 
-*Estrutura sujeita a alterações conforme o desenvolvimento das próximas etapas.*
+Os arquivos de cada serviço, seus scripts e dependências estão descritos em [`tutoriais/README.md`](tutoriais/README.md).
 
-## 4. Como executar
+## 4. Portas
 
-### Pré-requisitos
+| Serviço | Endereço/porta | Exposição |
+|---|---|---|
+| API Gateway | `http://127.0.0.1:3000` | Entrada pública da aplicação |
+| API REST | `http://127.0.0.1:3001` | Interna; bind em `127.0.0.1` |
+| GraphQL | `http://127.0.0.1:4000` | Interna; bind em `127.0.0.1` |
+| MySQL | `127.0.0.1:3307` | Infraestrutura local |
+| RabbitMQ AMQP | `127.0.0.1:5672` | Infraestrutura local |
+| RabbitMQ Management | `http://127.0.0.1:15672` | Administração local |
 
-- Node.js 22 ou superior;
-- npm;
-- Docker Desktop em execução;
-- Git.
+## 5. Fluxos principais
 
-### API REST
+### Matrícula
 
-Diretório: `tutoriais/rest/`
+1. O cliente chama `POST /api/matriculas` pelo Gateway, ou executa a mutation GraphQL `realizarMatricula`.
+2. O GraphQL, quando utilizado, chama a API REST por HTTP.
+3. A REST valida o curso, simula a autorização de pagamento e grava a matrícula no MySQL.
+4. Após a gravação, a REST publica `matricula.confirmada` na exchange `topic` `leman.eventos`.
+5. Os consumidores de notificações e auditoria processam o evento.
+6. Cada consumidor mantém sua própria idempotência persistida no MySQL.
 
-#### 1. Configuração do banco de dados
+### Publicação de curso
 
-A API utiliza MySQL 8.4, executado por meio do Docker.
+Ao criar um curso diretamente com status `publicado`, a REST publica `curso.publicado`. A fila de auditoria recebe todos os eventos; a fila de notificações recebe somente eventos `matricula.*`.
 
-O contêiner utiliza as seguintes configurações de desenvolvimento:
+**Limitação conhecida:** a publicação de `curso.publicado` está ligada ao cadastro já publicado (`POST /cursos`). A transição de `rascunho` para `publicado` por `PUT` ou `PATCH` ainda não publica esse evento.
 
-| Configuração | Valor |
+## 6. Regras de negócio principais
+
+- O título de um curso deve ser único.
+- A carga horária deve ser um inteiro positivo.
+- Um curso publicado deve ter descrição, instrutor e categoria preenchidos.
+- Matrículas só podem ser realizadas em cursos publicados.
+- Não pode existir matrícula ativa duplicada para o mesmo e-mail e curso.
+- Um curso com matrículas associadas não pode ser excluído.
+- A matrícula só é gravada após a autorização simulada de pagamento.
+
+## 7. Documentação e execução
+
+Consulte [`tutoriais/README.md`](tutoriais/README.md) para pré-requisitos, variáveis de ambiente, instalação, inicialização, chaves fictícias, testes e roteiro de demonstração.
+
+## 8. Grupo e responsabilidades
+
+| Integrante | Responsabilidades |
 |---|---|
-| Contêiner | `leman-mysql` |
-| Banco de dados | `leman` |
-| Usuário | `leman_user` |
-| Porta no computador | `3307` |
-| Porta no contêiner | `3306` |
+| **Marianna Ghiraldelli** | API REST; `README.md` geral; `tutoriais/README.md`; `00-indice.pdf`; preparação dos testes individuais de REST, mensageria, GraphQL e Gateway; organização final das pastas e ZIP de entrega. |
+| **Antônio Campello** | GraphQL; RabbitMQ; apoio/revisão e execução dos testes individuais das quatro etapas; hospedagem em nuvem (atividade extra). |
+| **Eduardo Galvão** | Documentação do projeto Fio-Condutor; `relatorio-tutoriais.pdf`; `apresentacao.pdf`. |
+| **João Napoleone** | API Gateway. |
+| **Lucas Jerônimo** | Integração entre mensageria e API REST; `compose.yaml`; instruções de execução. |
 
-Para iniciar o banco de dados, execute o Docker Compose no diretório em que está localizado o arquivo de configuração:
+### Atividades compartilhadas e pendentes de validação
 
-```bash
-docker compose up -d
-```
+- **Todos:** revisar os commits e participar da criação/conferência das tags `etapa-1-rest`, `etapa-2-mensageria`, `etapa-3-graphql` e `etapa-4-gateway`.
+- **Todos:** validar o teste de integração e ensaiar a demonstração do fluxo completo.
+- **A definir no grupo:** responsável por consolidar o teste ponta a ponta e registrar evidências da execução.
+- **A definir no grupo:** responsável por revisar o `openapi.yaml` e confirmar que corresponde aos endpoints REST implementados.
+- **A definir no grupo:** confirmar que os diagramas de arquitetura e as referências ABNT estão no relatório e na apresentação.
 
-#### 2. Configuração das variáveis de ambiente
+A hospedagem em nuvem é uma atividade extra e não deve comprometer os requisitos obrigatórios da entrega.
 
-Dentro de `tutoriais/rest/`, crie um arquivo `.env` com as configurações de conexão:
+## 9. Uso de Inteligência Artificial
 
-```env
-DB_HOST=127.0.0.1
-DB_PORT=3307
-DB_USER=leman_user
-DB_PASSWORD=leman_dev_123
-DB_NAME=leman
-```
+Ferramentas de IA foram utilizadas como apoio à compreensão de conceitos, revisão e depuração de código, elaboração de testes e organização da documentação. O grupo deve revisar o conteúdo produzido, validar os resultados no ambiente de execução e ser capaz de explicar as decisões e o código apresentados.
 
-O arquivo `.env.example` contém o modelo das variáveis necessárias. Não compartilhe credenciais reais nem envie o arquivo `.env` ao repositório.
+## 10. Repositório e vídeo
 
-#### 3. Criação das tabelas e dados iniciais
+- Repositório Git: **inserir URL real antes da entrega**.
+- Vídeo de demonstração: **inserir URL real, se houver**.
 
-Com o contêiner em execução, acesse o diretório `tutoriais/rest/` e execute:
+## 11. Referências
 
-```bash
-docker exec -i leman-mysql mysql -u leman_user -pleman_dev_123 leman < database/schema.sql
-```
-
-Para inserir os dados iniciais de teste:
-
-```bash
-docker exec -i leman-mysql mysql -u leman_user -pleman_dev_123 leman < database/seed.sql
-```
-
-#### 4. Instalação das dependências
-
-```bash
-cd tutoriais/rest
-npm install
-```
-
-#### 5. Inicialização do servidor
-
-Para iniciar em modo de desenvolvimento:
-
-```bash
-npm run dev
-```
-
-A API REST estará disponível em:
-
-`http://127.0.0.1:3001`
-
-Rota de verificação:
-
-`GET /saude`
-
-### Endpoints implementados — API REST
-
-#### Cursos
-
-| Método | Endpoint | Descrição | Status esperado |
-|---|---|---|---|
-| GET | `/cursos` | Lista os cursos cadastrados | 200 |
-| GET | `/cursos/:id` | Consulta um curso pelo ID | 200 |
-| POST | `/cursos` | Cadastra um novo curso | 201 |
-| PUT | `/cursos/:id` | Atualiza todos os dados de um curso | 200 |
-| PATCH | `/cursos/:id` | Atualiza parcialmente um curso | 200 |
-| DELETE | `/cursos/:id` | Exclui um curso | 204 |
-
-**Regras de negócio:**
-
-- O título do curso deve ser único.
-- A carga horária deve ser um número inteiro positivo.
-- O status deve ser `rascunho` ou `publicado`.
-- Cursos publicados devem possuir descrição, instrutor e categoria preenchidos.
-- O PUT exige o envio de todos os campos obrigatórios.
-- O PATCH permite alterar campos individualmente.
-- Um curso associado a matrículas não pode ser excluído.
-
-**Filtros, ordenação e paginação:**
-
-A listagem de cursos permite filtrar por:
-
-- `categoria`
-- `status`
-- `instrutor`
-
-Também permite ordenar por ID, título ou carga horária, utilizando os parâmetros `ordenarPor` e `ordem`.
-
-A paginação utiliza os parâmetros:
-
-- `pagina`: número da página;
-- `limite`: quantidade de registros por página, com máximo de 50.
-
-**Tratamento de erros:**
-
-- `400 Bad Request`: identificador ou parâmetros inválidos.
-- `404 Not Found`: curso inexistente.
-- `409 Conflict`: título duplicado ou tentativa de exclusão de curso associado a matrículas.
-- `422 Unprocessable Content`: dados inválidos ou informações obrigatórias ausentes.
-- `500 Internal Server Error`: erro interno durante o processamento da requisição.
-
-A exclusão bem-sucedida retorna `204 No Content`, sem corpo na resposta.
-
-#### Matrículas
-
-| Método | Endpoint | Descrição | Status esperado |
-|---|---|---|---|
-| GET | `/matriculas` | Lista as matrículas cadastradas | 200 |
-| GET | `/matriculas/:id` | Consulta uma matrícula pelo ID | 200 |
-| POST | `/matriculas` | Registra uma nova matrícula | 201 |
-
-**Regras de negócio:**
-
-- A matrícula deve estar associada a um curso existente.
-- Não é permitido realizar matrícula em cursos que ainda não foram publicados.
-- Não é permitido cadastrar uma matrícula ativa duplicada para o mesmo estudante e curso.
-- A matrícula é registrada somente após a autorização do pagamento simulado.
-
-**Filtros disponíveis:**
-
-- `cursoId`
-- `status`
-- `email`
-
-**Tratamento de erros:**
-
-- `400 Bad Request`: identificador inválido.
-- `404 Not Found`: curso ou matrícula inexistente.
-- `409 Conflict`: matrícula ativa duplicada.
-- `422 Unprocessable Content`: dados inválidos, curso não publicado ou pagamento não autorizado.
-- `500 Internal Server Error`: erro interno durante o processamento da requisição.
-
-**Observação:** a integração com pagamento é simulada nesta etapa. A função de pagamento retorna uma autorização fictícia, identificada por um código de transação iniciado por `MOCK-`.
-
-### Documentação da API
-
-A especificação dos endpoints está disponível no arquivo:
-
-` tutoriais/rest/openapi.yaml `
-
-O arquivo utiliza o padrão OpenAPI 3.1.0 e descreve os endpoints, parâmetros, modelos de dados e respostas da API.
-
-## 5. Portas e processos
-
-| Serviço | Porta | Status |
-|---|---:|---|
-| API REST | 3001 | Implementado e testado |
-| MySQL | 3307 | Implementado e testado |
-| GraphQL | A definir | Pendente |
-| API Gateway | A definir | Pendente |
-| RabbitMQ | 5672 | Pendente |
-| RabbitMQ Management | 15672 | Pendente |
-
-## 6. Chaves e usuários de teste
-
-A definir durante a implementação do API Gateway.
-
-As credenciais utilizadas na demonstração serão fictícias e destinadas exclusivamente ao ambiente de desenvolvimento.
-
-## 7. Roteiro de demonstração
-
-O roteiro de demonstração será atualizado após a implementação e integração dos serviços.
-
-Para a etapa da API REST, a demonstração contempla:
-
-1. Verificação da disponibilidade da API.
-2. Cadastro e consulta de cursos.
-3. Atualização completa e parcial de cursos.
-4. Aplicação de filtros, ordenação e paginação.
-5. Exclusão de cursos e validação das regras de negócio.
-6. Cadastro e consulta de matrículas.
-7. Validação das regras de matrícula e simulação de pagamento.
-8. Verificação da persistência dos dados no MySQL.
-
-## 8. Decisões e limitações
-
-- O MySQL foi escolhido como banco de dados relacional da aplicação.
-- O banco de dados é executado em contêiner Docker para facilitar a configuração do ambiente.
-- A API REST utiliza consultas parametrizadas para interação com o banco de dados.
-- A exclusão de cursos associados a matrículas é impedida para preservar a integridade referencial.
-- O pagamento é simulado, não existindo integração com um serviço financeiro real.
-- As demais decisões arquiteturais e limitações serão documentadas conforme as próximas etapas forem implementadas.
-
-## 9. Divisão de responsabilidades
-
-| Integrante | Responsabilidade |
-|---|---|
-| Marianna Ghiraldelli | A definir |
-| Antônio Campello | A definir |
-| Eduardo Galvão | Documentação do Fio-Condutor |
-| Lucas Jerônimo | A definir |
-| João Napoleone | A definir |
-
-## 10. Uso de ferramentas de Inteligência Artificial
-
-Ferramentas de Inteligência Artificial foram utilizadas como apoio ao desenvolvimento, incluindo orientação técnica, esclarecimento de conceitos, revisão de código, identificação de possíveis problemas e auxílio na documentação.
-
-As ferramentas utilizadas e suas respectivas finalidades serão detalhadas na versão final deste documento.
-
-## 11. Repositório e demonstração
-
-- **Repositório Git:** inserir link do repositório.
-- **Vídeo de demonstração:** inserir link após a gravação.
-
-## 12. Referências
-
-- Materiais e tutoriais disponibilizados na disciplina.
-- [Documentação oficial do Node.js](https://nodejs.org/docs/latest/api/).
-- [Documentação oficial do Express](https://expressjs.com/).
-- [Documentação oficial do MySQL](https://dev.mysql.com/doc/).
-- [Documentação oficial do Apollo Server](https://www.apollographql.com/docs/apollo-server/).
-- [Documentação oficial do RabbitMQ](https://www.rabbitmq.com/docs).
-- [Especificação OpenAPI](https://spec.openapis.org/oas/v3.1.0).
+- Node.js. Documentação oficial: https://nodejs.org/docs/latest/api/
+- Express. Documentação oficial: https://expressjs.com/
+- MySQL. Documentação oficial: https://dev.mysql.com/doc/
+- RabbitMQ. Documentação oficial: https://www.rabbitmq.com/docs
+- Apollo Server. Documentação oficial: https://www.apollographql.com/docs/apollo-server/
+- GraphQL. Especificação e documentação: https://graphql.org/
+- OpenAPI Initiative. OpenAPI Specification 3.1: https://spec.openapis.org/oas/v3.1.0
+- IETF. RFC 9457 — Problem Details for HTTP APIs: https://www.rfc-editor.org/rfc/rfc9457
