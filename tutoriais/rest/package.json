@@ -8,6 +8,7 @@
     "test:rest": "node testes/testar-rest.js"
   },
   "dependencies": {
+    "amqplib": "^2.3.3",
     "axios": "^1.21.1",
     "dotenv": "^18.0.10",
     "express": "^5.2.0",

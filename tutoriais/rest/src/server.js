@@ -1,54 +1,41 @@
-
+import 'dotenv/config';
 import express from 'express';
-import pool from './database.js';
 import { randomUUID } from 'node:crypto';
+import pool from './database.js';
 import { publishEvent } from '../../mensageria/publisher.js';
 
 const app = express();
-const PORT = 3001;
+const HOST = process.env.HOST || process.env.HOST || '127.0.0.1';
+const PORT = Number(process.env.PORT || 3001);
 
 app.use(express.json());
 
-// Propagar ou gerar X-Request-Id
+// Propaga ou gera X-Request-Id para rastreabilidade ponta a ponta (Gateway -> REST -> RabbitMQ)
 app.use((req, res, next) => {
-    const requestId = req.headers['x-request-id'] || randomUUID();
-
-    req.requestId = requestId;
-    res.setHeader('X-Request-Id', requestId);
-
+    req.requestId = req.get('x-request-id') || randomUUID();
+    res.set('X-Request-Id', req.requestId);
     next();
 });
 
-async function publicarEvento(routingKey, dados, req) {
+// Publica evento de domínio sem derrubar a API caso o broker esteja offline
+async function emitirEventoSeguro(routingKey, dados, requestId) {
     try {
-        await publishEvent(
-            routingKey,
-            dados,
-            { requestId: req.requestId }
-        );
-
-        console.log(
-            `[REST] Evento ${routingKey} publicado | X-Request-Id=${req.requestId}`
-        );
+        await publishEvent(routingKey, dados, { requestId });
     } catch (erro) {
-        console.error(
-            `[REST] Falha ao publicar ${routingKey}: ${erro.message} | X-Request-Id=${req.requestId}`
+        console.warn(
+            `[REST][AVISO] Evento "${routingKey}" não publicado no RabbitMQ (${erro.message}) | X-Request-Id=${requestId}`
         );
     }
 }
 
-// Simulação temporária do Gateway de Pagamento
 async function autorizarPagamentoMock(aluno, curso) {
     console.log(`Simulando pagamento de ${aluno} para o curso ${curso.titulo}`);
-
-    // Simula uma autorização aprovada
     return {
         aprovado: true,
         transacaoId: `MOCK-${Date.now()}`
     };
 }
 
-// Formato padronizado para erros (RFC 9457)
 function problema(req, res, status, detalhe) {
     const titulos = {
         400: 'Requisição inválida',
@@ -65,15 +52,16 @@ function problema(req, res, status, detalhe) {
             title: titulos[status],
             status,
             detail: detalhe,
-            instance: req.originalUrl
+            instance: req.originalUrl,
+            requestId: req.requestId
         });
 }
 
-// Rota de saúde
 app.get('/saude', (req, res) => {
     res.status(200).json({
         status: 'ok',
-        message: 'API da Plataforma de Cursos Leman funcionando!'
+        message: 'API da Plataforma de Cursos Leman funcionando!',
+        requestId: req.requestId
     });
 });
 
@@ -88,29 +76,20 @@ app.post('/cursos', async (req, res) => {
         status = 'rascunho'
     } = req.body;
 
-    // Validar título
     if (typeof titulo !== 'string' || !titulo.trim()) {
         return problema(req, res, 422, 'O título do curso é obrigatório.');
     }
 
-    // Validar carga horária
     if (!Number.isInteger(cargaHoraria) || cargaHoraria <= 0) {
         return problema(req, res, 422, 'A carga horária deve ser um número inteiro maior que zero.');
     }
 
-    // Validar status
     if (!['rascunho', 'publicado'].includes(status)) {
         return problema(req, res, 422, 'O status deve ser rascunho ou publicado.');
     }
 
-    // Curso publicado precisa estar completo
     if (status === 'publicado') {
-        const camposObrigatorios = {
-            descricao,
-            instrutor,
-            categoria
-        };
-
+        const camposObrigatorios = { descricao, instrutor, categoria };
         const camposAusentes = Object.entries(camposObrigatorios)
             .filter(([, valor]) => typeof valor !== 'string' || !valor.trim())
             .map(([campo]) => campo);
@@ -126,7 +105,6 @@ app.post('/cursos', async (req, res) => {
     }
 
     try {
-        // Verificar se já existe um curso com o mesmo título
         const [cursosExistentes] = await pool.execute(
             `SELECT id FROM cursos WHERE LOWER(titulo) = LOWER(?)`,
             [titulo.trim()]
@@ -136,7 +114,6 @@ app.post('/cursos', async (req, res) => {
             return problema(req, res, 409, 'Já existe um curso com esse título.');
         }
 
-        // Inserir curso no banco
         const [resultado] = await pool.execute(
             `INSERT INTO cursos
                 (titulo, descricao, instrutor, categoria, carga_horaria, status)
@@ -162,32 +139,19 @@ app.post('/cursos', async (req, res) => {
         };
 
         if (novoCurso.status === 'publicado') {
-            await publicarEvento(
-                'curso.publicado',
-                novoCurso,
-                req
-            );
+            await emitirEventoSeguro('curso.publicado', novoCurso, req.requestId);
         }
 
         return res
             .status(201)
             .location(`/cursos/${novoCurso.id}`)
             .json(novoCurso);
-
     } catch (erro) {
         if (erro.code === 'ER_DUP_ENTRY') {
             return problema(req, res, 409, 'Já existe um curso com esse título.');
         }
-
         console.error('Erro ao cadastrar curso:', erro);
-
-        return res.status(500).type('application/problem+json').json({
-            type: 'about:blank',
-            title: 'Erro interno do servidor',
-            status: 500,
-            detail: 'Não foi possível cadastrar o curso.',
-            instance: req.originalUrl
-        });
+        return problema(req, res, 500, 'Não foi possível cadastrar o curso.');
     }
 });
 
@@ -205,23 +169,14 @@ app.get('/cursos', async (req, res) => {
         const pagina = Number(req.query.pagina ?? 1);
         const limite = Number(req.query.limite ?? 10);
 
-        // Validar paginação
-        if (
-            !Number.isInteger(pagina) ||
-            !Number.isInteger(limite) ||
-            pagina < 1 ||
-            limite < 1
-        ) {
-            return problema(req, res, 400,
-                'Página e limite devem ser números inteiros positivos.');
+        if (!Number.isInteger(pagina) || !Number.isInteger(limite) || pagina < 1 || limite < 1) {
+            return problema(req, res, 400, 'Página e limite devem ser números inteiros positivos.');
         }
 
         if (limite > 50) {
-            return problema(req, res, 400,
-                'O limite máximo por página é 50.');
+            return problema(req, res, 400, 'O limite máximo por página é 50.');
         }
 
-        // Validar ordenação
         const camposOrdenacao = {
             id: 'id',
             titulo: 'titulo',
@@ -229,16 +184,13 @@ app.get('/cursos', async (req, res) => {
         };
 
         if (!camposOrdenacao[ordenarPor]) {
-            return problema(req, res, 400,
-                'Campo de ordenação inválido.');
+            return problema(req, res, 400, 'Campo de ordenação inválido.');
         }
 
         if (!['asc', 'desc'].includes(ordem)) {
-            return problema(req, res, 400,
-                'A ordem deve ser asc ou desc.');
+            return problema(req, res, 400, 'A ordem deve ser asc ou desc.');
         }
 
-        // Construir filtros
         const filtros = [];
         const valores = [];
 
@@ -246,22 +198,17 @@ app.get('/cursos', async (req, res) => {
             filtros.push('categoria = ?');
             valores.push(categoria);
         }
-
         if (status) {
             filtros.push('status = ?');
             valores.push(status);
         }
-
         if (instrutor) {
             filtros.push('instrutor LIKE ?');
             valores.push(`%${instrutor}%`);
         }
 
-        const where = filtros.length
-            ? `WHERE ${filtros.join(' AND ')}`
-            : '';
+        const where = filtros.length ? `WHERE ${filtros.join(' AND ')}` : '';
 
-        // Consultar quantidade total de cursos
         const [contagem] = await pool.query(
             `SELECT COUNT(*) AS total FROM cursos ${where}`,
             valores
@@ -270,7 +217,6 @@ app.get('/cursos', async (req, res) => {
         const total = contagem[0].total;
         const inicio = (pagina - 1) * limite;
 
-        // Consultar cursos com filtros, ordenação e paginação
         const [dados] = await pool.query(
             `SELECT
                 id,
@@ -296,17 +242,9 @@ app.get('/cursos', async (req, res) => {
                 totalPaginas: Math.ceil(total / limite)
             }
         });
-
     } catch (erro) {
         console.error('Erro ao listar cursos:', erro);
-
-        return res.status(500).type('application/problem+json').json({
-            type: 'about:blank',
-            title: 'Erro interno do servidor',
-            status: 500,
-            detail: 'Não foi possível consultar os cursos.',
-            instance: req.originalUrl
-        });
+        return problema(req, res, 500, 'Não foi possível consultar os cursos.');
     }
 });
 
@@ -338,7 +276,6 @@ app.get('/cursos/:id', async (req, res) => {
         }
 
         return res.status(200).json(resultado[0]);
-
     } catch (erro) {
         console.error('Erro ao consultar curso:', erro);
         return problema(req, res, 500, 'Não foi possível consultar o curso.');
@@ -353,14 +290,7 @@ app.put('/cursos/:id', async (req, res) => {
         return problema(req, res, 400, 'ID inválido.');
     }
 
-    const {
-        titulo,
-        descricao,
-        instrutor,
-        categoria,
-        cargaHoraria,
-        status
-    } = req.body;
+    const { titulo, descricao, instrutor, categoria, cargaHoraria, status } = req.body;
 
     if (
         typeof titulo !== 'string' || !titulo.trim() ||
@@ -375,7 +305,7 @@ app.put('/cursos/:id', async (req, res) => {
 
     try {
         const [cursosEncontrados] = await pool.execute(
-            'SELECT id FROM cursos WHERE id = ?',
+            'SELECT id, status FROM cursos WHERE id = ?',
             [id]
         );
 
@@ -384,8 +314,7 @@ app.put('/cursos/:id', async (req, res) => {
         }
 
         const [titulosExistentes] = await pool.execute(
-            `SELECT id FROM cursos
-             WHERE LOWER(titulo) = LOWER(?) AND id <> ?`,
+            `SELECT id FROM cursos WHERE LOWER(titulo) = LOWER(?) AND id <> ?`,
             [titulo.trim(), id]
         );
 
@@ -402,15 +331,7 @@ app.put('/cursos/:id', async (req, res) => {
                  carga_horaria = ?,
                  status = ?
              WHERE id = ?`,
-            [
-                titulo.trim(),
-                descricao.trim(),
-                instrutor.trim(),
-                categoria.trim(),
-                cargaHoraria,
-                status,
-                id
-            ]
+            [titulo.trim(), descricao.trim(), instrutor.trim(), categoria.trim(), cargaHoraria, status, id]
         );
 
         const cursoAtualizado = {
@@ -423,15 +344,16 @@ app.put('/cursos/:id', async (req, res) => {
             status
         };
 
-        return res.status(200).json(cursoAtualizado);
+        if (cursosEncontrados[0].status !== 'publicado' && cursoAtualizado.status === 'publicado') {
+            await emitirEventoSeguro('curso.publicado', cursoAtualizado, req.requestId);
+        }
 
+        return res.status(200).json(cursoAtualizado);
     } catch (erro) {
         console.error('Erro ao atualizar curso:', erro);
-
         if (erro.code === 'ER_DUP_ENTRY') {
             return problema(req, res, 409, 'Já existe outro curso com esse título.');
         }
-
         return problema(req, res, 500, 'Não foi possível atualizar o curso.');
     }
 });
@@ -444,25 +366,14 @@ app.patch('/cursos/:id', async (req, res) => {
         return problema(req, res, 400, 'ID inválido.');
     }
 
-    const camposPermitidos = [
-        'titulo',
-        'descricao',
-        'instrutor',
-        'categoria',
-        'cargaHoraria',
-        'status'
-    ];
-
+    const camposPermitidos = ['titulo', 'descricao', 'instrutor', 'categoria', 'cargaHoraria', 'status'];
     const camposRecebidos = Object.keys(req.body);
 
     if (camposRecebidos.length === 0) {
         return problema(req, res, 422, 'Informe pelo menos um campo para atualizar.');
     }
 
-    const campoInvalido = camposRecebidos.find(
-        campo => !camposPermitidos.includes(campo)
-    );
-
+    const campoInvalido = camposRecebidos.find((campo) => !camposPermitidos.includes(campo));
     if (campoInvalido) {
         return problema(req, res, 422, `Campo não permitido: ${campoInvalido}.`);
     }
@@ -486,62 +397,41 @@ app.patch('/cursos/:id', async (req, res) => {
             return problema(req, res, 404, 'Curso não encontrado.');
         }
 
+        const statusAnterior = resultado[0].status;
         const cursoAtualizado = {
             ...resultado[0],
             ...req.body
         };
 
-        // Validar título
-        if (
-            typeof cursoAtualizado.titulo !== 'string' ||
-            !cursoAtualizado.titulo.trim()
-        ) {
+        if (typeof cursoAtualizado.titulo !== 'string' || !cursoAtualizado.titulo.trim()) {
             return problema(req, res, 422, 'O título deve ser preenchido.');
         }
-
         cursoAtualizado.titulo = cursoAtualizado.titulo.trim();
 
-        // Validar campos de texto
         for (const campo of ['descricao', 'instrutor', 'categoria']) {
             if (typeof cursoAtualizado[campo] !== 'string') {
                 return problema(req, res, 422, `O campo ${campo} deve ser um texto.`);
             }
-
             cursoAtualizado[campo] = cursoAtualizado[campo].trim();
         }
 
-        // Cursos publicados precisam estar completos
         if (
             cursoAtualizado.status === 'publicado' &&
-            ['descricao', 'instrutor', 'categoria'].some(
-                campo => !cursoAtualizado[campo]
-            )
+            ['descricao', 'instrutor', 'categoria'].some((campo) => !cursoAtualizado[campo])
         ) {
-            return problema(
-                req,
-                res,
-                422,
-                'Para publicar um curso, preencha descrição, instrutor e categoria.'
-            );
+            return problema(req, res, 422, 'Para publicar um curso, preencha descrição, instrutor e categoria.');
         }
 
-        // Validar carga horária
-        if (
-            !Number.isInteger(cursoAtualizado.cargaHoraria) ||
-            cursoAtualizado.cargaHoraria <= 0
-        ) {
+        if (!Number.isInteger(cursoAtualizado.cargaHoraria) || cursoAtualizado.cargaHoraria <= 0) {
             return problema(req, res, 422, 'A carga horária deve ser um número inteiro positivo.');
         }
 
-        // Validar status
         if (!['rascunho', 'publicado'].includes(cursoAtualizado.status)) {
             return problema(req, res, 422, 'Status inválido.');
         }
 
-        // Verificar título duplicado
         const [titulosExistentes] = await pool.execute(
-            `SELECT id FROM cursos
-             WHERE LOWER(titulo) = LOWER(?) AND id <> ?`,
+            `SELECT id FROM cursos WHERE LOWER(titulo) = LOWER(?) AND id <> ?`,
             [cursoAtualizado.titulo, id]
         );
 
@@ -549,7 +439,6 @@ app.patch('/cursos/:id', async (req, res) => {
             return problema(req, res, 409, 'Já existe outro curso com esse título.');
         }
 
-        // Atualizar no banco
         await pool.execute(
             `UPDATE cursos
              SET titulo = ?,
@@ -570,15 +459,16 @@ app.patch('/cursos/:id', async (req, res) => {
             ]
         );
 
-        return res.status(200).json(cursoAtualizado);
+        if (statusAnterior !== 'publicado' && cursoAtualizado.status === 'publicado') {
+            await emitirEventoSeguro('curso.publicado', cursoAtualizado, req.requestId);
+        }
 
+        return res.status(200).json(cursoAtualizado);
     } catch (erro) {
         console.error('Erro ao atualizar curso:', erro);
-
         if (erro.code === 'ER_DUP_ENTRY') {
             return problema(req, res, 409, 'Já existe outro curso com esse título.');
         }
-
         return problema(req, res, 500, 'Não foi possível atualizar o curso.');
     }
 });
@@ -592,17 +482,11 @@ app.delete('/cursos/:id', async (req, res) => {
     }
 
     try {
-        // Verificar se o curso existe
-        const [cursosEncontrados] = await pool.execute(
-            'SELECT id FROM cursos WHERE id = ?',
-            [id]
-        );
-
+        const [cursosEncontrados] = await pool.execute('SELECT id FROM cursos WHERE id = ?', [id]);
         if (cursosEncontrados.length === 0) {
             return problema(req, res, 404, 'Curso não encontrado.');
         }
 
-        // Verificar se existem matrículas associadas
         const [matriculasEncontradas] = await pool.execute(
             'SELECT id FROM matriculas WHERE curso_id = ? LIMIT 1',
             [id]
@@ -617,17 +501,10 @@ app.delete('/cursos/:id', async (req, res) => {
             );
         }
 
-        // Excluir curso
-        await pool.execute(
-            'DELETE FROM cursos WHERE id = ?',
-            [id]
-        );
-
+        await pool.execute('DELETE FROM cursos WHERE id = ?', [id]);
         return res.status(204).send();
-
     } catch (erro) {
         console.error('Erro ao excluir curso:', erro);
-
         if (erro.code === 'ER_ROW_IS_REFERENCED_2') {
             return problema(
                 req,
@@ -636,7 +513,6 @@ app.delete('/cursos/:id', async (req, res) => {
                 'Não é possível excluir um curso que possui matrículas associadas.'
             );
         }
-
         return problema(req, res, 500, 'Não foi possível excluir o curso.');
     }
 });
@@ -665,12 +541,10 @@ app.get('/matriculas', async (req, res) => {
             condicoes.push('curso_id = ?');
             parametros.push(Number(cursoId));
         }
-
         if (status) {
             condicoes.push('status = ?');
             parametros.push(status);
         }
-
         if (email) {
             condicoes.push('LOWER(email) LIKE ?');
             parametros.push(`%${email.toLowerCase()}%`);
@@ -681,46 +555,30 @@ app.get('/matriculas', async (req, res) => {
         }
 
         const [matriculas] = await pool.execute(sql, parametros);
-
         return res.status(200).json(matriculas);
-
     } catch (erro) {
         console.error('Erro ao listar matrículas:', erro);
-
-        return res.status(500).type('application/problem+json').json({
-            type: 'about:blank',
-            title: 'Erro interno do servidor',
-            status: 500,
-            detail: 'Não foi possível listar as matrículas.',
-            instance: req.originalUrl
-        });
+        return problema(req, res, 500, 'Não foi possível listar as matrículas.');
     }
 });
 
-// POST /matriculas - Registrar nova matrícula
+// POST /matriculas - Registrar nova matrícula e publicar evento no RabbitMQ
 app.post('/matriculas', async (req, res) => {
     const { cursoId, aluno, email } = req.body;
 
-    // Validar ID do curso
     if (!Number.isInteger(cursoId) || cursoId < 1) {
         return problema(req, res, 422, 'Informe um ID de curso válido.');
     }
 
-    // Validar nome do aluno
     if (typeof aluno !== 'string' || !aluno.trim()) {
         return problema(req, res, 422, 'O nome do aluno é obrigatório.');
     }
 
-    // Validar e-mail
-    if (
-        typeof email !== 'string' ||
-        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
-    ) {
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
         return problema(req, res, 422, 'Informe um e-mail válido.');
     }
 
     try {
-        // Buscar curso no banco de dados
         const [cursosEncontrados] = await pool.execute(
             `SELECT id, titulo, status FROM cursos WHERE id = ?`,
             [cursoId]
@@ -732,14 +590,12 @@ app.post('/matriculas', async (req, res) => {
 
         const curso = cursosEncontrados[0];
 
-        // Somente cursos publicados aceitam matrículas
         if (curso.status !== 'publicado') {
             return problema(req, res, 422, 'Não é possível realizar matrícula em um curso que não está publicado.');
         }
 
         const emailNormalizado = email.trim().toLowerCase();
 
-        // Verificar matrícula ativa duplicada
         const [matriculasExistentes] = await pool.execute(
             `SELECT id FROM matriculas
              WHERE curso_id = ?
@@ -752,27 +608,17 @@ app.post('/matriculas', async (req, res) => {
             return problema(req, res, 409, 'Este aluno já possui uma matrícula ativa neste curso.');
         }
 
-        // Solicitar autorização de pagamento
-        const pagamento = await autorizarPagamentoMock(
-            aluno.trim(),
-            curso
-        );
+        const pagamento = await autorizarPagamentoMock(aluno.trim(), curso);
 
         if (!pagamento.aprovado) {
             return problema(req, res, 422, 'O pagamento não foi aprovado. A matrícula não foi criada.');
         }
 
-        // Salvar matrícula no banco somente após aprovação
         const [resultado] = await pool.execute(
             `INSERT INTO matriculas
                 (curso_id, aluno, email, data_matricula, status, pagamento_id)
              VALUES (?, ?, ?, CURRENT_DATE, 'ativa', ?)`,
-            [
-                cursoId,
-                aluno.trim(),
-                emailNormalizado,
-                pagamento.transacaoId
-            ]
+            [cursoId, aluno.trim(), emailNormalizado, pagamento.transacaoId]
         );
 
         const novaMatricula = {
@@ -785,27 +631,15 @@ app.post('/matriculas', async (req, res) => {
             pagamentoId: pagamento.transacaoId
         };
 
-        await publicarEvento(
-            'matricula.confirmada',
-            novaMatricula,
-            req
-        );
+        await emitirEventoSeguro('matricula.confirmada', novaMatricula, req.requestId);
 
         return res
             .status(201)
             .location(`/matriculas/${novaMatricula.id}`)
             .json(novaMatricula);
-
     } catch (erro) {
         console.error('Erro ao registrar matrícula:', erro);
-
-        return res.status(500).type('application/problem+json').json({
-            type: 'about:blank',
-            title: 'Erro interno do servidor',
-            status: 500,
-            detail: 'Não foi possível registrar a matrícula.',
-            instance: req.originalUrl
-        });
+        return problema(req, res, 500, 'Não foi possível registrar a matrícula.');
     }
 });
 
@@ -836,21 +670,63 @@ app.get('/matriculas/:id', async (req, res) => {
         }
 
         return res.status(200).json(resultado[0]);
-
     } catch (erro) {
         console.error('Erro ao consultar matrícula:', erro);
-
-        return res.status(500).type('application/problem+json').json({
-            type: 'about:blank',
-            title: 'Erro interno do servidor',
-            status: 500,
-            detail: 'Não foi possível consultar a matrícula.',
-            instance: req.originalUrl
-        });
+        return problema(req, res, 500, 'Não foi possível consultar a matrícula.');
     }
 });
 
-// Iniciar servidor
-app.listen(PORT, '127.0.0.1', () => {
-    console.log(`API REST executando em http://127.0.0.1:${PORT}`);
+// PATCH /matriculas/:id/cancelar - Cancelar matrícula e publicar matricula.cancelada
+app.patch('/matriculas/:id/cancelar', async (req, res) => {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id < 1) {
+        return problema(req, res, 400, 'ID inválido.');
+    }
+
+    try {
+        const [resultado] = await pool.execute(`
+            SELECT
+                id,
+                curso_id AS cursoId,
+                aluno,
+                email,
+                data_matricula AS dataMatricula,
+                status,
+                pagamento_id AS pagamentoId
+            FROM matriculas
+            WHERE id = ?
+        `, [id]);
+
+        if (resultado.length === 0) {
+            return problema(req, res, 404, 'Matrícula não encontrada.');
+        }
+
+        const matricula = resultado[0];
+        if (matricula.status === 'cancelada') {
+            return problema(req, res, 409, 'Esta matrícula já se encontra cancelada.');
+        }
+
+        await pool.execute(`UPDATE matriculas SET status = 'cancelada' WHERE id = ?`, [id]);
+
+        const matriculaCancelada = { ...matricula, status: 'cancelada' };
+        await emitirEventoSeguro('matricula.cancelada', matriculaCancelada, req.requestId);
+
+        return res.status(200).json(matriculaCancelada);
+    } catch (erro) {
+        console.error('Erro ao cancelar matrícula:', erro);
+        return problema(req, res, 500, 'Não foi possível cancelar a matrícula.');
+    }
+});
+
+// Tratador global para JSON sintaticamente malformado (400 Problem Details)
+app.use((err, req, res, next) => {
+    if (err?.type === 'entity.parse.failed') {
+        return problema(req, res, 400, 'O corpo JSON enviado está malformado.');
+    }
+    return next(err);
+});
+
+app.listen(PORT, HOST, () => {
+    console.log(`API REST executando em http://${HOST}:${PORT}`);
 });
