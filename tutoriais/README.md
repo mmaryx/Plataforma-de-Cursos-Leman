@@ -1,18 +1,21 @@
+# Plataforma de Cursos Leman — Tutoriais em Funcionamento
 
-# Manual de execução e demonstração — Plataforma de Cursos Leman
+## 1. Tema e núcleo implementado
 
-Este manual descreve como configurar, iniciar e testar os quatro componentes implementados pelo Grupo 02: API REST, mensageria RabbitMQ, GraphQL e API Gateway.
+A Plataforma de Cursos Leman é uma solução de educação online concebida para apoiar a criação e o gerenciamento de cursos, a matrícula de alunos e a disponibilização de conteúdos educacionais. No contexto completo do domínio, o sistema contempla atores como alunos, instrutores e administradores, além de funcionalidades de acompanhamento de progresso, atividades, avaliações, emissão de certificados, notificações e armazenamento de arquivos.
 
-> Execute os comandos a partir da raiz do repositório, salvo quando o comando indicar `cd` para uma pasta específica. Não compacte nem versione `node_modules/` ou arquivos `.env`.
+Para o núcleo executável desta entrega, o escopo foi delimitado ao gerenciamento completo de cursos (CRUD), ao registro, consulta e cancelamento de matrículas e à consulta consolidada dessas informações. Esse recorte integra quatro padrões e tecnologias em funcionamento: uma API REST como fonte de verdade e regras de negócio; mensageria com RabbitMQ para eventos assíncronos de publicação e matrícula; um servidor GraphQL para consultas compostas sem acoplamento direto ao banco; e um API Gateway como ponto único de entrada com autenticação, controle de taxa, circuit breaker e rota agregada.
 
-## 1. Pré-requisitos
+---
 
-- Node.js 22 ou superior e npm.
-- Docker Desktop em execução.
-- Git.
-- Portas locais disponíveis: 3000, 3001, 3307, 4000, 5672 e 15672.
+## 2. Pré-requisitos
 
-Verifique:
+- **Node.js 22** ou superior e **npm**.
+- **Docker Engine / Docker Desktop em execução** (com suporte a `docker compose`).
+- **Git**.
+- Portas locais disponíveis: `3000`, `3001`, `3307`, `4000`, `5672` e `15672`.
+
+Verifique o ambiente antes de iniciar:
 
 ```bash
 node --version
@@ -21,385 +24,305 @@ docker --version
 docker compose version
 ```
 
-## 2. Infraestrutura: MySQL e RabbitMQ
+---
 
-O `docker-compose.yml` da raiz inicia o MySQL. O arquivo `tutoriais/compose.yaml` inicia o RabbitMQ. Execute:
+## 3. Como executar (passo a passo)
+
+> Execute os comandos a partir da raiz do projeto, salvo quando o comando indicar `cd` para uma pasta específica. Não compacte nem versione `node_modules/` ou arquivos `.env`.
+
+### 3.1. Subir a infraestrutura (MySQL e RabbitMQ)
+
+Inicie os containers de banco de dados e mensageria com um único comando Docker Compose:
 
 ```bash
-# Na raiz do repositório: MySQL
-docker compose up -d
-
-# Na raiz do repositório: RabbitMQ
+# A partir da raiz do projeto:
 docker compose -f tutoriais/compose.yaml up -d
+
+# Ou, se estiver dentro da pasta tutoriais/:
+# docker compose up -d
 
 docker ps
 ```
 
-Se o RabbitMQ já existir com o nome `leman-rabbitmq`, não tente criar outro container com o mesmo nome. Confira e reutilize o existente:
+Caso os containers `leman-mysql` ou `leman-rabbitmq` já existam parados no ambiente, reutilize-os sem recriar:
 
 ```bash
-docker ps -a --filter name=leman-rabbitmq
-# Se estiver parado:
-docker start leman-rabbitmq
+docker ps -a --filter name=leman
+docker start leman-mysql leman-rabbitmq
 ```
 
-Serviços:
-- MySQL 8.4: host `127.0.0.1`, porta `3307`, banco `leman`.
-- RabbitMQ 4 Management: AMQP `5672`; painel `http://localhost:15672`.
-- Painel RabbitMQ: usuário `guest`, senha `guest` (ambiente local de demonstração).
+Serviços ativos na infraestrutura:
+- **MySQL 8.4:** host `127.0.0.1`, porta `3307`, banco `leman`.
+- **RabbitMQ 4 Management:** AMQP `127.0.0.1:5672`; painel web `http://127.0.0.1:15672` (usuário `guest`, senha `guest`).
 
-Para acompanhar o RabbitMQ:
-
-```bash
-docker logs -f leman-rabbitmq
-```
-
-Para encerrar os serviços ao final da demonstração:
-
-```bash
-docker compose down
-docker compose -f tutoriais/compose.yaml down
-```
-
-Para acompanhar o MySQL:
+Acompanhamento de logs e encerramento ao final da demonstração:
 
 ```bash
 docker logs -f leman-mysql
+docker logs -f leman-rabbitmq
+
+# Encerrar containers ao finalizar:
+docker compose -f tutoriais/compose.yaml down
 ```
 
-### 2.1. Banco de dados
+### 3.2. Configurar variáveis de ambiente (`.env`)
 
-Crie `tutoriais/rest/.env` a partir do exemplo:
+Copie os arquivos `.env.example` para `.env` em cada serviço (nunca inclua arquivos `.env` no Git ou no ZIP final):
 
 ```bash
 cp tutoriais/rest/.env.example tutoriais/rest/.env
+cp tutoriais/mensageria/.env.example tutoriais/mensageria/.env
+cp tutoriais/graphql/.env.example tutoriais/graphql/.env
+cp tutoriais/gateway/.env.example tutoriais/gateway/.env
 ```
 
-No `.env`, configure as credenciais locais do MySQL. O exemplo de desenvolvimento usa:
+Preencha `tutoriais/rest/.env` com as credenciais locais do MySQL e a URL do RabbitMQ:
 
 ```env
+HOST=127.0.0.1
+PORT=3001
 DB_HOST=127.0.0.1
 DB_PORT=3307
 DB_USER=leman_user
 DB_PASSWORD=leman_dev_123
 DB_NAME=leman
+RABBITMQ_URL=amqp://guest:guest@127.0.0.1:5672
 ```
 
-Crie as tabelas e carregue os dados iniciais:
+Configuração padrão dos demais serviços:
+
+| Serviço | Arquivo | Variáveis |
+|---|---|---|
+| REST | `tutoriais/rest/.env` | `HOST=127.0.0.1`, `PORT=3001`, `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `RABBITMQ_URL` |
+| Mensageria | `tutoriais/mensageria/.env` | `RABBITMQ_URL=amqp://guest:guest@127.0.0.1:5672` (credenciais MySQL lidas de `../rest/.env`) |
+| GraphQL | `tutoriais/graphql/.env` | `HOST=127.0.0.1`, `PORT=4000`, `REST_API_URL=http://127.0.0.1:3001` |
+| Gateway | `tutoriais/gateway/.env` | `HOST=0.0.0.0`, `PORT=3000`, `REST_API_URL=http://127.0.0.1:3001`, `GRAPHQL_URL=http://127.0.0.1:4000` |
+
+### 3.3. Criar tabelas e carregar dados iniciais no MySQL
+
+Caso o volume do MySQL ainda não tenha executado `schema.sql` e `seed.sql` na inicialização (ou caso queira resetar a base):
 
 ```bash
 docker exec -i leman-mysql mysql -u leman_user -pleman_dev_123 leman < tutoriais/rest/database/schema.sql
 docker exec -i leman-mysql mysql -u leman_user -pleman_dev_123 leman < tutoriais/rest/database/seed.sql
 ```
 
-A tabela `eventos_processados`, utilizada pela idempotência dos consumidores, está incluída no `schema.sql`. Se o banco já existia antes da inclusão dessa tabela, execute novamente o trecho `CREATE TABLE IF NOT EXISTS` ou rode o schema atualizado.
+A tabela `eventos_processados`, utilizada para garantir a idempotência persistida dos consumidores RabbitMQ, já está incluída no `schema.sql`.
 
-> O comando usa a senha ilustrativa do ambiente local. Se ela for alterada no `.env`, ajuste também o comando de acesso ao MySQL.
-
-## 3. Variáveis de ambiente
-
-Os arquivos `.env.example` devem ser copiados para `.env` nas pastas indicadas. Nunca inclua `.env` no ZIP final nem no Git.
-
-| Serviço | Arquivo | Variáveis |
-|---|---|---|
-| REST | `tutoriais/rest/.env` | `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` |
-| Mensageria | `tutoriais/mensageria/.env` | `RABBITMQ_URL` (a conexão MySQL é lida de `../rest/.env`) |
-| GraphQL | `tutoriais/graphql/.env` | `HOST`, `PORT`, `REST_API_URL` |
-| Gateway | `tutoriais/gateway/.env` | `HOST`, `PORT`, `REST_API_URL`, `GRAPHQL_URL` |
-
-Exemplos de endereços locais:
-
-```env
-# mensageria/.env
-RABBITMQ_URL=amqp://guest:guest@127.0.0.1:5672
-```
-
-```env
-# graphql/.env
-HOST=127.0.0.1
-PORT=4000
-REST_API_URL=http://127.0.0.1:3001
-```
-
-```env
-# gateway/.env
-HOST=0.0.0.0
-PORT=3000
-REST_API_URL=http://127.0.0.1:3001
-GRAPHQL_URL=http://127.0.0.1:4000
-```
-
-## 4. Instalação das dependências
-
-Execute `npm install` em cada pasta Node.js:
+### 3.4. Instalar as dependências Node.js
 
 ```bash
-cd tutoriais/rest && npm install
-cd ../mensageria && npm install
-cd ../graphql && npm install
-cd ../gateway && npm install
+(cd tutoriais/rest && npm install)
+(cd tutoriais/mensageria && npm install)
+(cd tutoriais/graphql && npm install)
+(cd tutoriais/gateway && npm install)
 ```
 
-Se estiver usando um único terminal, volte à raiz do repositório entre os comandos ou abra um terminal separado por serviço.
+### 3.5. Iniciar os serviços (tabela de processos e portas)
 
-Os arquivos `package.json` e `package-lock.json` devem acompanhar cada serviço. `node_modules/` não deve ser enviado; ele é recriado por `npm install`.
+Abra cinco terminais separados na ordem abaixo e mantenha os processos ativos:
 
-## 5. Inicialização dos serviços
+| Ordem / Terminal | Pasta | Comando | Endereço / Porta | Exposição |
+|---|---|---|---:|---|
+| 1 | `tutoriais/mensageria` | `npm run consumer:notifications` | — | Worker AMQP |
+| 2 | `tutoriais/mensageria` | `npm run consumer:audit` | — | Worker AMQP |
+| 3 | `tutoriais/rest` | `npm start` (ou `npm run dev`) | `127.0.0.1:3001` | Interna (`loopback`) |
+| 4 | `tutoriais/graphql` | `npm start` (ou `npm run dev`) | `127.0.0.1:4000` | Interna (`loopback`) |
+| 5 | `tutoriais/gateway` | `npm start` (ou `npm run dev`) | `0.0.0.0:3000` | Pública (entrada única) |
 
-Abra terminais separados e mantenha os processos ativos.
-
-| Terminal | Pasta | Comando | Porta |
-|---|---|---|---:|
-| 1 | `tutoriais/mensageria` | `npm run consumer:notifications` | — |
-| 2 | `tutoriais/mensageria` | `npm run consumer:audit` | — |
-| 3 | `tutoriais/rest` | `npm run dev` | 3001 |
-| 4 | `tutoriais/graphql` | `npm run dev` | 4000 |
-| 5 | `tutoriais/gateway` | `npm run dev` | 3000 |
-
-A API REST e o GraphQL devem escutar em `127.0.0.1`. O Gateway é a entrada pública da aplicação. O MySQL e RabbitMQ rodam em containers.
-
-Verificações diretas locais:
-
-- REST: `http://127.0.0.1:3001/saude`
+Verificações diretas de disponibilidade:
+- API REST: `http://127.0.0.1:3001/saude`
 - GraphQL: `http://127.0.0.1:4000/`
-- Gateway: `http://127.0.0.1:3000/saude`
+- API Gateway: `http://127.0.0.1:3000/saude`
 - RabbitMQ Management: `http://127.0.0.1:15672`
 
-## 6. API Keys fictícias do Gateway
+### 3.6. Executar testes automatizados individuais
 
-As chaves abaixo são valores de demonstração definidos no código do Gateway. Não são segredos de produção.
-
-| Cliente | API Key | Limite | Permissão |
-|---|---|---:|---|
-| Portal web | `chave-portal-leman-123` | 60 req/min | Rotas disponíveis ao portal |
-| Aplicativo | `chave-app-aluno-456` | 10 req/min | Rotas disponíveis ao aplicativo |
-| Parceiro catálogo | `chave-parceiro-catalogo-789` | 30 req/min | Somente `/api/cursos` |
-
-O Gateway expõe:
-- `GET /saude` sem API Key.
-- `/api/cursos` e `/api/matriculas` para clientes autorizados.
-- `/api/graphql` para encaminhar operações GraphQL.
-- `GET /api/painel/cursos/:id` como rota agregada REST + GraphQL.
-
-## 7. Testes automatizados individuais
-
-Os testes individuais verificam cada componente separadamente. Antes de executá-los, confirme que os serviços dependentes estão ativos e que os scripts existem no `package.json` correspondente.
-
-Verifique a sintaxe dos arquivos de teste a partir da raiz:
+Com a infraestrutura e os cinco processos ativos:
 
 ```bash
 node --check tutoriais/rest/testes/testar-rest.js
+node --check tutoriais/rest/testes/routes.test.js
 node --check tutoriais/mensageria/test-messaging.js
 node --check tutoriais/graphql/test-graphql.js
 node --check tutoriais/gateway/test-gateway.js
 ```
 
-Execute cada teste:
-
 ```bash
-cd tutoriais/rest
-npm run test:rest
+(cd tutoriais/rest && npm test && npm run test:rest)
+(cd tutoriais/mensageria && npm run test:messaging)
+(cd tutoriais/graphql && npm run test:graphql)
+(cd tutoriais/gateway && npm run test:gateway)
 ```
 
-```bash
-cd tutoriais/mensageria
-npm run test:messaging
-```
+---
 
-```bash
-cd tutoriais/graphql
-npm run test:graphql
-```
+## 4. Chaves e usuários de teste (fictícios)
 
-```bash
-cd tutoriais/gateway
-npm run test:gateway
-```
+Todas as chaves, credenciais e dados de alunos abaixo são fictícios, criados exclusivamente para demonstração local:
 
-Se `npm` informar `Missing script`, confira o `package.json` da pasta e adicione o script correspondente apontando para o arquivo de teste. No REST, por exemplo:
+| Perfil / Cliente | Identificador / API Key | Limite | Permissão |
+|---|---|---:|---|
+| Portal web | `chave-portal-leman-123` | 60 req/min | `/api/cursos`, `/api/matriculas`, `/api/graphql`, `/api/painel` |
+| Aplicativo aluno | `chave-app-aluno-456` | 10 req/min | `/api/cursos`, `/api/matriculas`, `/api/graphql`, `/api/painel` |
+| Parceiro catálogo | `chave-parceiro-catalogo-789` | 30 req/min | Somente `/api/cursos` |
+| Healthcheck público | *(sem chave)* | — | Somente `GET /saude` |
 
-```json
-"test:rest": "node testes/testar-rest.js"
-```
+---
 
-Os scripts de mensageria publicam mensagens de demonstração; observe os logs dos consumidores e a fila `leman.dlq` no painel RabbitMQ. A execução dos testes GraphQL cria uma matrícula de teste. O script REST cria e remove um curso de teste. O script do Gateway cria um curso de teste publicado; ele permanece no banco para que o evento de publicação e a rota agregada possam ser demonstrados. Remova-o manualmente somente depois da demonstração, se desejar.
+## 5. Teste de integração ponta a ponta
 
-## 8. Teste de integração e demonstração do fluxo completo
-
-Os testes individuais não substituem o teste de integração. O grupo deve executar e registrar um cenário ponta a ponta, passando pelo Gateway e verificando a comunicação entre Gateway, REST, MySQL, RabbitMQ, consumidores e GraphQL quando aplicável.
-
-### Cenário sugerido
-
-1. Iniciar MySQL e RabbitMQ.
+1. Subir MySQL e RabbitMQ (`docker compose -f tutoriais/compose.yaml up -d`).
 2. Iniciar os consumidores de notificações e auditoria.
 3. Iniciar REST, GraphQL e Gateway.
-4. Criar ou selecionar um curso publicado.
-5. Enviar uma matrícula pelo Gateway com um `X-Request-Id` identificável.
-6. Confirmar a matrícula na resposta e no MySQL.
-7. Confirmar a publicação de `matricula.confirmada` no RabbitMQ.
-8. Conferir que os dois consumidores processaram o evento e registraram idempotência.
-9. Consultar o painel GraphQL/agregado e verificar os dados da matrícula.
-10. Conferir o mesmo `X-Request-Id` nos logs dos componentes envolvidos.
-
-Exemplo de chamada para matrícula (substitua `cursoId` por um curso publicado e use e-mail ainda não matriculado):
+4. Enviar uma matrícula pelo Gateway com um `X-Request-Id` rastreável (use um e-mail ainda não matriculado no curso):
 
 ```bash
-curl -i -X POST http://127.0.0.1:3000/api/matriculas \
+curl -i -X POST [http://127.0.0.1:3000/api/matriculas](http://127.0.0.1:3000/api/matriculas) \
   -H 'X-API-Key: chave-portal-leman-123' \
   -H 'Content-Type: application/json' \
   -H 'X-Request-Id: integracao-leman-001' \
   -d '{"cursoId":1,"aluno":"Aluno Integração","email":"integracao.unico@leman.edu.br"}'
 ```
 
-**Responsáveis:** Lucas conduz a validação técnica da integração REST + mensageria; Marianna e Antônio apoiam a validação dos testes individuais; Napoleone valida o Gateway; Eduardo registra o cenário no relatório/apresentação. A execução ponta a ponta e o ensaio devem envolver todos os integrantes.
+5. Confirmar resposta `201 Created` com cabeçalho `Location: /api/matriculas/:id` e gravação no MySQL.
+6. Confirmar a publicação de `matricula.confirmada` na exchange `leman.eventos` e o processamento independente nos logs dos dois consumidores com `X-Request-Id: integracao-leman-001` e registro na tabela `eventos_processados`.
+7. Consultar o painel GraphQL (`/api/graphql`) ou a rota agregada (`/api/painel/cursos/1`) e verificar a matrícula refletida.
 
-## 9. Roteiro de demonstração
+---
+
+## 6. Roteiro de demonstração
 
 ### Cena 1 — Ambiente e ponto de entrada
 
 - Mostrar MySQL e RabbitMQ ativos (`docker ps`).
-- Mostrar REST em `127.0.0.1:3001` e GraphQL em `127.0.0.1:4000`.
-- Mostrar Gateway na porta `3000`.
-- Explicar que o Gateway é o ponto de entrada previsto para clientes.
+- Mostrar REST (`127.0.0.1:3001`) e GraphQL (`127.0.0.1:4000`) restritos localmente (`loopback`).
+- Mostrar o API Gateway na porta `3000` como único ponto de entrada externo.
 
 ### Cena 2 — REST pelo Gateway
 
-Sem chave:
+Sem chave (esperado `401 Unauthorized` em `application/problem+json`):
 
 ```bash
-curl -i http://127.0.0.1:3000/api/cursos
+curl -i [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos)
 ```
 
-Esperado: `401` com Problem Details.
-
-Com chave:
+Com chave (esperado `200 OK`):
 
 ```bash
-curl -i http://127.0.0.1:3000/api/cursos \
+curl -i [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos) \
   -H 'X-API-Key: chave-portal-leman-123'
 ```
 
-Esperado: `200`.
-
-Criar curso publicado:
+Criar curso publicado (esperado `201 Created`, cabeçalho `Location` reescrito para `/api/cursos/:id` e publicação de `curso.publicado` para auditoria):
 
 ```bash
-curl -i -X POST http://127.0.0.1:3000/api/cursos \
+curl -i -X POST [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos) \
   -H 'X-API-Key: chave-portal-leman-123' \
   -H 'Content-Type: application/json' \
   -H 'X-Request-Id: demo-curso-001' \
   -d '{"titulo":"Curso Demo Gateway","descricao":"Curso para demonstração","instrutor":"Equipe Leman","categoria":"Tecnologia","cargaHoraria":20,"status":"publicado"}'
 ```
 
-Esperado: `201`, cabeçalho `Location` reescrito para `/api/cursos/:id` e publicação de `curso.publicado` para auditoria.
-
 ### Cena 3 — Matrícula e evento RabbitMQ
 
-Use um `cursoId` existente e publicado:
-
 ```bash
-curl -i -X POST http://127.0.0.1:3000/api/matriculas \
+curl -i -X POST [http://127.0.0.1:3000/api/matriculas](http://127.0.0.1:3000/api/matriculas) \
   -H 'X-API-Key: chave-portal-leman-123' \
   -H 'Content-Type: application/json' \
   -H 'X-Request-Id: demo-matricula-001' \
   -d '{"cursoId":1,"aluno":"Aluno Demonstração","email":"demo.unico@leman.edu.br"}'
 ```
 
-Esperado: `201`; os consumidores de notificações e auditoria devem mostrar o mesmo `X-Request-Id`. Use um e-mail novo para evitar a regra de matrícula ativa duplicada.
+Esperado: `201 Created` e o mesmo `X-Request-Id` registrado nos logs do Gateway, da API REST e dos consumidores de notificações e auditoria.
 
 ### Cena 4 — Retry, DLQ e duplicidade
 
 ```bash
-cd tutoriais/mensageria
-npm run test:messaging
+(cd tutoriais/mensageria && npm run test:messaging)
 ```
 
-Observe o evento de falha simulada, as tentativas e a mensagem na DLQ. O teste também publica o mesmo `eventId` duas vezes para demonstrar idempotência. A tabela `eventos_processados` separa os registros por consumidor.
+Mostrar nos terminais dos consumidores e no painel RabbitMQ (`http://127.0.0.1:15672/#/queues`) o descarte de evento duplicado (`eventos_processados`) e a fila `leman.dlq` recebendo mensagens após falha simulada ou payload inválido.
 
 ### Cena 5 — GraphQL
 
 ```bash
-cd tutoriais/graphql
-npm run test:graphql
+(cd tutoriais/graphql && npm run test:graphql)
 ```
 
-O script executa painel agregado, filtro, mutation de matrícula e erro de negócio. A mutation chama a REST; a REST grava no MySQL e publica `matricula.confirmada`.
+Demonstrar a consulta aninhada `painelCatalogo` (com `DataLoader` evitando N+1), a mutation `realizarMatricula` via REST e o mapeamento de erro de negócio para `GraphQLError`.
 
 ### Cena 6 — Autenticação, autorização e rate limit do Gateway
 
 ```bash
-cd tutoriais/gateway
-npm run test:gateway
+(cd tutoriais/gateway && npm run test:gateway)
 ```
 
-O script verifica `401`, `403`, roteamento, GraphQL, agregação e `429` com `Retry-After`. O limite do aplicativo é 10 requisições por minuto; execute o teste com uma instância recém-iniciada do Gateway ou aguarde a janela de 60 segundos para repetir.
+Demonstrar `401` (sem chave), `403` (parceiro tentando acessar `/api/matriculas`), reescrita de `Location` e `429 Too Many Requests` com cabeçalho `Retry-After` ao exceder 10 req/min na chave `chave-app-aluno-456`.
 
 ### Cena 7 — Falhas e resiliência
 
-Para demonstrar `502` e `503`, pare temporariamente o serviço REST (Ctrl+C no terminal da REST) e faça chamadas autenticadas a `/api/cursos`. A primeira falha de upstream retorna `502`; após o limite de falhas do disjuntor, novas chamadas durante a janela aberta retornam `503` com `Retry-After`. Reinicie a REST e aguarde o período do disjuntor (10 segundos) para recuperação.
-
-Para demonstrar `504`, é necessário que o serviço de destino aceite a conexão, mas demore mais que o timeout configurado. O timeout da rota REST no Gateway é 2500 ms e o de GraphQL é 3000 ms. Não confunda serviço sem conexão (normalmente `502`) com serviço que excedeu o tempo (`504`).
-
-A rota agregada:
+- **502 e 503 (Circuit Breaker):** parar temporariamente a API REST (`Ctrl+C` no terminal da REST) e enviar chamadas autenticadas a `/api/cursos`. As primeiras falhas retornam `502 Bad Gateway`; após abrir o disjuntor, novas chamadas retornam `503 Service Unavailable` com `Retry-After`. Reiniciar a REST e aguardar 10 segundos para recuperação.
+- **504 (Gateway Timeout):** ocorre quando o serviço interno aceita conexão, mas excede o timeout configurado (2500 ms para REST e 3000 ms para GraphQL).
+- **Rota agregada e degradação parcial:**
 
 ```bash
-curl -i http://127.0.0.1:3000/api/painel/cursos/1 \
+curl -i [http://127.0.0.1:3000/api/painel/cursos/1](http://127.0.0.1:3000/api/painel/cursos/1) \
   -H 'X-API-Key: chave-portal-leman-123'
 ```
 
-Com REST e GraphQL disponíveis, deve retornar `parcial: false`. Com GraphQL indisponível, mas REST disponível, deve retornar `200` com `parcial: true`, `matriculas: null` e aviso. Se a REST estiver indisponível, a rota agregada não consegue fornecer os dados principais e retorna erro.
+Com REST e GraphQL ativos, retorna `parcial: false`. Com GraphQL indisponível e REST ativa, retorna `200 OK` com `parcial: true`, `matriculas: null` e aviso.
 
 ### Cena 8 — Correlação e decisões
 
-- Escolher um `X-Request-Id` conhecido e mostrar o mesmo identificador nos logs do Gateway, REST, GraphQL (quando usado) e consumidores (quando houver evento).
-- Explicar por que REST é responsável pelas regras e persistência, GraphQL agrega consultas, RabbitMQ desacopla efeitos assíncronos e Gateway centraliza entrada e políticas.
-- Mostrar o diagrama C4 e as decisões documentadas no diretório `documentacao/`.
+- Rastrear um `X-Request-Id` nos logs do Gateway, REST, GraphQL e consumidores RabbitMQ.
+- Apresentar a arquitetura, decisões e evidências documentadas em `relatorio-tutoriais.pdf` e nos diagramas de `documentacao/`.
 
-## 10. Decisões e limitações conhecidas
+---
 
-| Decisão | Justificativa | Limitação |
+## 7. Decisões e limitações (resumo)
+
+| Decisão | Justificativa | Limitação conhecida |
 |---|---|---|
-| MySQL como persistência | Dados relacionais de cursos e matrículas | Ambiente local de demonstração |
-| RabbitMQ `topic` | Roteamento por chaves de evento | Sem Outbox transacional |
-| Filas independentes | Consumidores com responsabilidades distintas | Efeitos externos são simulados |
-| Idempotência no MySQL | Sobrevive ao reinício do consumidor | Efeito externo e registro não formam uma transação única |
-| GraphQL consulta REST | Mantém REST como fonte de verdade | Consultas podem gerar múltiplas chamadas HTTP |
-| Gateway como entrada | Centraliza autenticação, limites e resiliência | Rate limit em memória, não distribuído |
-| Pagamento simulado | Demonstra regra de matrícula sem integração financeira | Não processa pagamentos reais |
+| MySQL 8.4 como persistência | Integridade relacional para cursos, matrículas e idempotência | Ambiente local de demonstração |
+| RabbitMQ `topic` (`leman.eventos`) | Desacopla notificações e auditoria por chave de roteamento | Publicação direta sem padrão Outbox transacional |
+| Idempotência no MySQL | Evita reprocessamento de eventos após reinício dos consumidores | Efeito externo simulado e registro no banco não compartilham transação |
+| GraphQL sobre REST + `DataLoader` | Mantém a REST como única fonte de verdade e elimina N+1 | Depende da disponibilidade da API REST |
+| API Gateway centralizado | Unifica autenticação, rate limit, circuit breaker e agregação | Contadores de rate limit e estado do disjuntor em memória local |
+| Pagamento e e-mail simulados | Valida regras de negócio sem dependências financeiras externas | Não realiza cobrança nem envio real de mensagens |
 
-## 11. Integrantes e responsabilidades
+---
 
-| Integrante | Responsabilidades |
+## 8. Divisão de responsabilidades
+
+| Integrante | Responsabilidades principais |
 |---|---|
-| **Marianna Ghiraldelli** | API REST; README geral e manual; índice PDF; preparação dos testes individuais das quatro etapas; organização final das pastas e ZIP. |
-| **Antônio Campello** | GraphQL; RabbitMQ; apoio/revisão e execução dos testes individuais das quatro etapas; hospedagem em nuvem (extra). |
-| **Eduardo Galvão** | Documentação do projeto Fio-Condutor; relatório dos tutoriais; apresentação. |
-| **João Napoleone** | API Gateway. |
-| **Lucas Jerônimo** | Integração entre mensageria e API REST; compose do RabbitMQ; instruções de execução. |
+| **Marianna Ghiraldelli** | Implementação da API REST; `README.md` e manual de execução; índice da entrega (`00-indice.pdf`); preparação dos testes individuais e organização do pacote ZIP. |
+| **Antônio José Campello Neto** | Implementação de GraphQL e mensageria RabbitMQ; apoio, revisão e execução dos testes individuais e ponta a ponta; implantação e validação em nuvem AWS (EC2, Amazon RDS e Amazon MQ). |
+| **Eduardo Galvão** | Documentação do projeto Fio-Condutor (oficinas e checkpoints); elaboração do relatório técnico (`relatorio-tutoriais`) e dos slides de apresentação (`apresentacao.pdf`). |
+| **João Napoleone** | Implementação do API Gateway (autenticação, autorização, rate limit, proxy reverso, circuit breaker e rota agregada). |
+| **Lucas Jerônimo** | Integração entre mensageria RabbitMQ e API REST; configuração do Docker Compose e instruções de execução. |
 
-### Pendências compartilhadas antes da entrega
+---
 
-- **Teste de integração e demonstração ponta a ponta:** ainda precisam ser executados, revisados e registrados pelo grupo.
-- **Git:** revisar os commits de todos e criar/conferir as tags `etapa-1-rest`, `etapa-2-mensageria`, `etapa-3-graphql` e `etapa-4-gateway`.
-- **OpenAPI:** definir quem fará a revisão final do `openapi.yaml`, garantindo que descreva os endpoints e modelos reais da API REST.
-- **Documentação:** confirmar que os diagramas, decisões, riscos/mitigações e referências ABNT estão no relatório e na apresentação.
-- **Ensaio:** todos os integrantes devem participar e conseguir explicar o fluxo completo.
+## 9. Uso de ferramentas de Inteligência Artificial
 
-## 12. Uso de IA
+Ferramentas de Inteligência Artificial (**Google Gemini**, **OpenAI ChatGPT** e **Anthropic Claude**) foram utilizadas pelo grupo como apoio técnico para esclarecer especificações (RFC 9457, protocolo AMQP 0-9-1, Apollo Server 5 e DataLoader), revisar e depurar código, estruturar casos de teste e organizar a documentação. Todo o código-fonte, os comandos deste manual e as evidências de execução foram revisados e validados diretamente pelos integrantes no ambiente do projeto.
 
-Ferramentas de IA foram utilizadas como apoio para esclarecer conceitos, revisar e depurar código, sugerir testes e organizar a documentação. O grupo deve descrever o uso real, revisar o conteúdo e validar os resultados no ambiente do projeto.
+---
 
-## 13. Repositório, vídeo e referências
+## 10. Repositório, vídeo de reserva e referências
 
-- Repositório Git: **inserir URL real**.
-- Vídeo de demonstração: **inserir URL real, se solicitado/disponível**.
+- **Repositório Git:** `[INSERIR LINK DO REPOSITÓRIO GIT]`
+- **Vídeo de demonstração (reserva):** `[INSERIR LINK DO VÍDEO DE RESERVA]`
 
-Referências:
-- Node.js: https://nodejs.org/docs/latest/api/
-- Express: https://expressjs.com/
-- MySQL: https://dev.mysql.com/doc/
-- RabbitMQ: https://www.rabbitmq.com/docs
-- Apollo Server: https://www.apollographql.com/docs/apollo-server/
-- GraphQL: https://graphql.org/
-- OpenAPI 3.1: https://spec.openapis.org/oas/v3.1.0
-- RFC 9457: https://www.rfc-editor.org/rfc/rfc9457
+### Referências
+
+- APOLLO GRAPHQL. Apollo Server documentation. Disponível em: https://www.apollographql.com/docs/apollo-server/. Acesso em: 16 nov. 2026.
+- EXPRESS. Express 5.x API reference. Disponível em: https://expressjs.com/. Acesso em: 16 nov. 2026.
+- GRAPHQL. GraphQL specification and documentation. Disponível em: https://graphql.org/. Acesso em: 16 nov. 2026.
+- IETF. RFC 9457: Problem Details for HTTP APIs. Disponível em: https://www.rfc-editor.org/rfc/rfc9457. Acesso em: 16 nov. 2026.
+- MYSQL. MySQL 8.4 Reference Manual. Disponível em: https://dev.mysql.com/doc/. Acesso em: 16 nov. 2026.
+- NODE.JS. Node.js v22 documentation. Disponível em: https://nodejs.org/docs/latest/api/. Acesso em: 16 nov. 2026.
+- OPENAPI INITIATIVE. OpenAPI Specification 3.1.0. Disponível em: https://spec.openapis.org/oas/v3.1.0. Acesso em: 16 nov. 2026.
+- RABBITMQ. RabbitMQ 4 documentation. Disponível em: https://www.rabbitmq.com/docs. Acesso em: 16 nov. 2026.
