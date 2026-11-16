@@ -120,36 +120,35 @@ A tabela `eventos_processados`, utilizada para garantir a idempotência persisti
 
 ### 3.5. Iniciar os serviços (tabela de processos e portas)
 
-Abra cinco terminais separados na ordem abaixo e mantenha os processos ativos:
+Garanta antes que não há processos Node antigos ocupando as portas (`pkill -f "tutoriais/" 2>/dev/null || true`). Abra cinco terminais separados na ordem abaixo e mantenha os processos ativos:
 
 | Ordem / Terminal | Pasta | Comando | Endereço / Porta | Exposição |
 |---|---|---|---:|---|
-| 1 | `tutoriais/mensageria` | `npm run consumer:notifications` | — | Worker AMQP |
-| 2 | `tutoriais/mensageria` | `npm run consumer:audit` | — | Worker AMQP |
-| 3 | `tutoriais/rest` | `npm start` (ou `npm run dev`) | `127.0.0.1:3001` | Interna (`loopback`) |
-| 4 | `tutoriais/graphql` | `npm start` (ou `npm run dev`) | `127.0.0.1:4000` | Interna (`loopback`) |
-| 5 | `tutoriais/gateway` | `npm start` (ou `npm run dev`) | `0.0.0.0:3000` | Pública (entrada única) |
+| 1 (T1) | `tutoriais/mensageria` | `npm run consumer:notifications` | — | Worker AMQP |
+| 2 (T2) | `tutoriais/mensageria` | `npm run consumer:audit` | — | Worker AMQP |
+| 3 (T3) | `tutoriais/rest` | `npm start` (ou `npm run dev`) | `127.0.0.1:3001` | Interna (`loopback`) |
+| 4 (T4) | `tutoriais/graphql` | `npm start` (ou `npm run dev`) | `127.0.0.1:4000` | Interna (`loopback`) |
+| 5 (T5) | `tutoriais/gateway` | `npm start` (ou `npm run dev`) | `0.0.0.0:3000` | Pública (entrada única) |
 
 Verificações diretas de disponibilidade:
 - API REST: `http://127.0.0.1:3001/saude`
-- GraphQL: `http://127.0.0.1:4000/`
+- GraphQL (Apollo Sandbox): `http://127.0.0.1:4000/`
 - API Gateway: `http://127.0.0.1:3000/saude`
 - RabbitMQ Management: `http://127.0.0.1:15672`
 
 ### 3.6. Executar testes automatizados individuais
 
-Com a infraestrutura e os cinco processos ativos:
+Com a infraestrutura e os cinco processos ativos, valide a sintaxe e execute os scripts consolidados em `tutoriais/testes/` (ou via `npm run test:*` nas pastas de cada serviço):
 
 ```bash
-node --check tutoriais/rest/testes/testar-rest.js
-node --check tutoriais/rest/testes/routes.test.js
-node --check tutoriais/mensageria/test-messaging.js
-node --check tutoriais/graphql/test-graphql.js
-node --check tutoriais/gateway/test-gateway.js
-```
+# Verificação de sintaxe
+node --check tutoriais/testes/testar-rest.js
+node --check tutoriais/testes/test-messaging.js
+node --check tutoriais/testes/test-graphql.js
+node --check tutoriais/testes/test-gateway.js
 
-```bash
-(cd tutoriais/rest && npm test && npm run test:rest)
+# Execução dos testes automatizados
+(cd tutoriais/rest && npm run test:rest)
 (cd tutoriais/mensageria && npm run test:messaging)
 (cd tutoriais/graphql && npm run test:graphql)
 (cd tutoriais/gateway && npm run test:gateway)
@@ -186,97 +185,150 @@ curl -i -X POST [http://127.0.0.1:3000/api/matriculas](http://127.0.0.1:3000/api
 ```
 
 5. Confirmar resposta `201 Created` com cabeçalho `Location: /api/matriculas/:id` e gravação no MySQL.
-6. Confirmar a publicação de `matricula.confirmada` na exchange `leman.eventos` e o processamento independente nos logs dos dois consumidores com `X-Request-Id: integracao-leman-001` e registro na tabela `eventos_processados`.
+6. Confirmar a publicação de `matricula.confirmada` na exchange `leman.eventos`, o processamento independente nos logs dos dois consumidores com `X-Request-Id: integracao-leman-001` e a gravação na tabela `eventos_processados`.
 7. Consultar o painel GraphQL (`/api/graphql`) ou a rota agregada (`/api/painel/cursos/1`) e verificar a matrícula refletida.
 
 ---
 
-## 6. Roteiro de demonstração
+## 6. Roteiro de demonstração (passo a passo)
 
-### Cena 1 — Ambiente e ponto de entrada
+Deixe abertos os 5 terminais dos serviços (`T1` a `T5`), um terminal livre (`T6`) na raiz do repositório para os comandos e o navegador no painel RabbitMQ (`http://127.0.0.1:15672/#/queues`) e Apollo Sandbox (`http://127.0.0.1:4000/`).
 
-- Mostrar MySQL e RabbitMQ ativos (`docker ps`).
-- Mostrar REST (`127.0.0.1:3001`) e GraphQL (`127.0.0.1:4000`) restritos localmente (`loopback`).
-- Mostrar o API Gateway na porta `3000` como único ponto de entrada externo.
+### Cena 1 — Ambiente e ponto de entrada único
 
-### Cena 2 — REST pelo Gateway
+1. Verificar os containers de infraestrutura ativos e o mapeamento de portas locais:
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+ss -tlnp | grep -E "3000|3001|4000"
+```
+2. Testar a rota pública de saúde do API Gateway (sem exigir `X-API-Key`):
+```bash
+curl -i [http://127.0.0.1:3000/saude](http://127.0.0.1:3000/saude)
+```
+* **Resultado esperado:** `HTTP/1.1 200 OK`, confirmando que o Gateway (`0.0.0.0:3000`) é a única entrada externa enquanto REST (`127.0.0.1:3001`) e GraphQL (`127.0.0.1:4000`) permanecem internos.
 
-Sem chave (esperado `401 Unauthorized` em `application/problem+json`):
+### Cena 2 — REST pelo Gateway (Autenticação, GET e POST com `Location` reescrito)
 
+1. Enviar requisição sem credencial (deve bloquear com `401 Unauthorized` no formato RFC 9457 `application/problem+json`):
 ```bash
 curl -i [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos)
 ```
-
-Com chave (esperado `200 OK`):
-
+2. Enviar requisição autenticada com a chave do Portal (deve retornar `200 OK` com a lista de cursos):
 ```bash
 curl -i [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos) \
   -H 'X-API-Key: chave-portal-leman-123'
 ```
-
-Criar curso publicado (esperado `201 Created`, cabeçalho `Location` reescrito para `/api/cursos/:id` e publicação de `curso.publicado` para auditoria):
-
+3. Criar um curso publicado passando `X-Request-Id` explícito:
 ```bash
 curl -i -X POST [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos) \
   -H 'X-API-Key: chave-portal-leman-123' \
   -H 'Content-Type: application/json' \
   -H 'X-Request-Id: demo-curso-001' \
-  -d '{"titulo":"Curso Demo Gateway","descricao":"Curso para demonstração","instrutor":"Equipe Leman","categoria":"Tecnologia","cargaHoraria":20,"status":"publicado"}'
+  -d "{\"titulo\":\"Curso Demo $(date +%H%M%S)\",\"descricao\":\"Curso publicado na demonstração\",\"instrutor\":\"Equipe Leman\",\"categoria\":\"Arquitetura\",\"cargaHoraria\":20,\"status\":\"publicado\"}"
 ```
+* **Resultado esperado:** `201 Created`, cabeçalho `Location` reescrito pelo Gateway para `/api/cursos/:id` e log `[AUDITORIA]` no terminal **T2** recebendo o evento `curso.publicado` com `X-Request-Id=demo-curso-001`.
 
 ### Cena 3 — Matrícula e evento RabbitMQ
 
+1. Registrar uma matrícula em curso publicado pelo Gateway:
 ```bash
 curl -i -X POST [http://127.0.0.1:3000/api/matriculas](http://127.0.0.1:3000/api/matriculas) \
   -H 'X-API-Key: chave-portal-leman-123' \
   -H 'Content-Type: application/json' \
   -H 'X-Request-Id: demo-matricula-001' \
-  -d '{"cursoId":1,"aluno":"Aluno Demonstração","email":"demo.unico@leman.edu.br"}'
+  -d "{\"cursoId\":1,\"aluno\":\"Aluno Demonstração\",\"email\":\"demo.$(date +%s)@leman.edu.br\"}"
 ```
+2. Conferir no MySQL a gravação dos registros de idempotência na tabela `eventos_processados`:
+```bash
+docker exec -i leman-mysql mysql -u leman_user -pleman_dev_123 leman \
+  -e "SELECT * FROM eventos_processados ORDER BY processado_em DESC LIMIT 4;"
+```
+* **Resultado esperado:** Resposta `201 Created` (com pagamento simulado `MOCK-...`) e os terminais **T1 (Notificações)** e **T2 (Auditoria)** processando `matricula.confirmada` de forma independente com o mesmo `X-Request-Id=demo-matricula-001`.
 
-Esperado: `201 Created` e o mesmo `X-Request-Id` registrado nos logs do Gateway, da API REST e dos consumidores de notificações e auditoria.
+### Cena 4 — Retry, Dead Letter Queue (DLQ) e duplicidade
 
-### Cena 4 — Retry, DLQ e duplicidade
-
+1. Executar a suíte de testes de mensageria:
 ```bash
 (cd tutoriais/mensageria && npm run test:messaging)
 ```
+* **Resultado esperado:** Nos terminais **T1** e **T2**, observar o descarte de evento com `eventId` duplicado (`já processado — ignorando duplicata`), as 3 tentativas de retry em falha simulada e o descarte de JSON inválido; no painel RabbitMQ (`http://127.0.0.1:15672/#/queues`), mostrar a fila **`leman.dlq`** com as mensagens mortas retidas.
 
-Mostrar nos terminais dos consumidores e no painel RabbitMQ (`http://127.0.0.1:15672/#/queues`) o descarte de evento duplicado (`eventos_processados`) e a fila `leman.dlq` recebendo mensagens após falha simulada ou payload inválido.
+### Cena 5 — GraphQL (Apollo Sandbox e suíte automatizada)
 
-### Cena 5 — GraphQL
-
+1. No **Apollo Sandbox** (`http://127.0.0.1:4000/`), executar a query aninhada `painelCatalogo` (consolida cursos e matrículas em uma chamada usando `DataLoader` para evitar $N+1$):
+```graphql
+query PainelCompleto {
+  painelCatalogo {
+    totalCursosPublicados
+    totalMatriculasAtivas
+    cursosPublicados {
+      id
+      titulo
+      instrutor
+      cargaHoraria
+      totalMatriculasAtivas
+      matriculas {
+        id
+        aluno
+        email
+        status
+      }
+    }
+  }
+}
+```
+2. Executar a mutation `realizarMatricula` no Apollo Sandbox (ao rodar duas vezes com o mesmo e-mail, demonstra o erro de conflito mapeado para `GraphQLError` com `extensions.code: "CONFLICT"`):
+```graphql
+mutation MatricularPeloGraphQL {
+  realizarMatricula(
+    input: {
+      cursoId: "1"
+      aluno: "Aluno Apollo Sandbox"
+      email: "apollo.sandbox@leman.edu.br"
+    }
+  ) {
+    id
+    cursoId
+    aluno
+    email
+    status
+    pagamentoId
+  }
+}
+```
+3. Executar também o script automatizado via Gateway:
 ```bash
 (cd tutoriais/graphql && npm run test:graphql)
 ```
 
-Demonstrar a consulta aninhada `painelCatalogo` (com `DataLoader` evitando N+1), a mutation `realizarMatricula` via REST e o mapeamento de erro de negócio para `GraphQLError`.
-
 ### Cena 6 — Autenticação, autorização e rate limit do Gateway
 
+1. Executar o script de validação das políticas transversais do Gateway (aguardar 60s se a chave do aplicativo tiver sido usada recentemente):
 ```bash
 (cd tutoriais/gateway && npm run test:gateway)
 ```
+* **Resultado esperado:** Demonstração automatizada de `401 Unauthorized` (sem chave), `403 Forbidden` (chave de parceiro restrita a `/api/cursos` tentando acessar `/api/matriculas`), reescrita de `Location` e `429 Too Many Requests` com `Retry-After: 60` após exceder 10 req/min na chave `chave-app-aluno-456`.
 
-Demonstrar `401` (sem chave), `403` (parceiro tentando acessar `/api/matriculas`), reescrita de `Location` e `429 Too Many Requests` com cabeçalho `Retry-After` ao exceder 10 req/min na chave `chave-app-aluno-456`.
+### Cena 7 — Falhas e resiliência (`502`, `503` e degradação parcial)
 
-### Cena 7 — Falhas e resiliência
-
-- **502 e 503 (Circuit Breaker):** parar temporariamente a API REST (`Ctrl+C` no terminal da REST) e enviar chamadas autenticadas a `/api/cursos`. As primeiras falhas retornam `502 Bad Gateway`; após abrir o disjuntor, novas chamadas retornam `503 Service Unavailable` com `Retry-After`. Reiniciar a REST e aguardar 10 segundos para recuperação.
-- **504 (Gateway Timeout):** ocorre quando o serviço interno aceita conexão, mas excede o timeout configurado (2500 ms para REST e 3000 ms para GraphQL).
-- **Rota agregada e degradação parcial:**
-
+1. **Circuit Breaker (`502` → `503`):** vá ao terminal **T3 (API REST)**, pare o serviço com **`Ctrl + C`** e dispare 3 chamadas seguidas:
 ```bash
-curl -i [http://127.0.0.1:3000/api/painel/cursos/1](http://127.0.0.1:3000/api/painel/cursos/1) \
-  -H 'X-API-Key: chave-portal-leman-123'
+for i in 1 2 3; do
+  echo "=== Chamada $i ==="
+  curl -s -i [http://127.0.0.1:3000/api/cursos](http://127.0.0.1:3000/api/cursos) -H 'X-API-Key: chave-portal-leman-123' | head -n 8
+done
 ```
-
-Com REST e GraphQL ativos, retorna `parcial: false`. Com GraphQL indisponível e REST ativa, retorna `200 OK` com `parcial: true`, `matriculas: null` e aviso.
+* As chamadas 1 e 2 retornam `502 Bad Gateway`; a chamada 3 abre o disjuntor e retorna `503 Service Unavailable` com `Retry-After: 10`. Religue a REST no **T3** (`npm start`) e aguarde **10 segundos**.
+2. **Rota agregada e degradação parcial:** teste primeiro com todos os serviços ativos (`"parcial": false`):
+```bash
+curl -s [http://127.0.0.1:3000/api/painel/cursos/1](http://127.0.0.1:3000/api/painel/cursos/1) -H 'X-API-Key: chave-portal-leman-123'
+```
+* Vá ao terminal **T4 (GraphQL)**, pare o serviço com **`Ctrl + C`** e rode o comando novamente: o Gateway devolve `200 OK` com `"parcial": true`, `"matriculas": null` e aviso de degradação graciosa. Religue o GraphQL no **T4** (`npm start`).
 
 ### Cena 8 — Correlação e decisões
 
-- Rastrear um `X-Request-Id` nos logs do Gateway, REST, GraphQL e consumidores RabbitMQ.
-- Apresentar a arquitetura, decisões e evidências documentadas em `relatorio-tutoriais.pdf` e nos diagramas de `documentacao/`.
+- Apontar o mesmo identificador (`demo-matricula-001`) nos logs dos terminais **T5 (Gateway)**, **T3 (REST)**, **T1 (Notificações)** e **T2 (Auditoria)**.
+- Apresentar a arquitetura, as decisões e as evidências documentadas em `relatorio-tutoriais.pdf` e nos diagramas C4/ADRs de `documentacao/`.
 
 ---
 
