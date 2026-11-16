@@ -1,0 +1,577 @@
+
+openapi: 3.1.0
+
+info:
+  title: API REST - Plataforma de Cursos Leman
+  description: API REST para gerenciamento de cursos da Plataforma de Cursos Leman.
+  version: 1.0.0
+
+servers:
+  - url: http://127.0.0.1:3001
+    description: Servidor local de desenvolvimento
+
+tags:
+  - name: Saúde
+    description: Verificação de disponibilidade da API
+  - name: Cursos
+    description: Operações de gerenciamento de cursos
+  - name: Matrículas
+    description: Operações de gerenciamento de matrículas
+
+paths:
+  /saude:
+    get:
+      tags:
+        - Saúde
+      summary: Verificar disponibilidade da API
+      responses:
+        "200":
+          description: API funcionando
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  message:
+                    type: string
+                    example: API da Plataforma de Cursos Leman funcionando!
+        "500":
+          $ref: "#/components/responses/Erro500"
+  /cursos:
+    get:
+      tags:
+        - Cursos
+      summary: Listar cursos
+      description: Permite filtrar, ordenar e paginar os cursos.
+      parameters:
+        - name: categoria
+          in: query
+          schema:
+            type: string
+          description: Filtra os cursos por categoria.
+
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [rascunho, publicado]
+          description: Filtra os cursos pelo status.
+
+        - name: instrutor
+          in: query
+          schema:
+            type: string
+          description: Filtra pelo nome do instrutor.
+
+        - name: ordenarPor
+          in: query
+          schema:
+            type: string
+            enum: [id, titulo, cargaHoraria]
+            default: id
+
+        - name: ordem
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+
+        - name: pagina
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+
+        - name: limite
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 10
+
+      responses:
+        "200":
+          description: Lista de cursos retornada com sucesso
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  dados:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Curso"
+                  paginacao:
+                    $ref: "#/components/schemas/Paginacao"
+
+        "400":
+          $ref: "#/components/responses/Erro400"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+    post:
+      tags:
+        - Cursos
+      summary: Cadastrar curso
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NovoCurso"
+
+      responses:
+        "201":
+          description: Curso criado com sucesso
+          headers:
+            Location:
+              description: Endereço do curso criado
+              schema:
+                type: string
+                example: /cursos/4
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Curso"
+
+        "409":
+          $ref: "#/components/responses/Erro409"
+
+        "422":
+          $ref: "#/components/responses/Erro422"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+  /cursos/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        description: Identificador numérico do curso
+        schema:
+          type: integer
+          minimum: 1
+
+    get:
+      tags:
+        - Cursos
+      summary: Consultar curso por ID
+      responses:
+        "200":
+          description: Curso encontrado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Curso"
+
+        "400":
+          $ref: "#/components/responses/Erro400"
+
+        "404":
+          $ref: "#/components/responses/Erro404"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+    put:
+      tags:
+        - Cursos
+      summary: Atualizar curso completamente
+      description: Substitui todos os campos do curso.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CursoCompleto"
+      responses:
+        "200":
+          description: Curso atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Curso"
+
+        "400":
+          $ref: "#/components/responses/Erro400"
+
+        "404":
+          $ref: "#/components/responses/Erro404"
+
+        "409":
+          $ref: "#/components/responses/Erro409"
+
+        "422":
+          $ref: "#/components/responses/Erro422"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+    patch:
+      tags:
+        - Cursos
+      summary: Atualizar parcialmente um curso
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                titulo:
+                  type: string
+                descricao:
+                  type: string
+                instrutor:
+                  type: string
+                categoria:
+                  type: string
+                cargaHoraria:
+                  type: integer
+                  minimum: 1
+                status:
+                  type: string
+                  enum: [rascunho, publicado]
+              minProperties: 1
+
+      responses:
+        "200":
+          description: Curso atualizado
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Curso"
+
+        "400":
+          $ref: "#/components/responses/Erro400"
+
+        "404":
+          $ref: "#/components/responses/Erro404"
+
+        "409":
+          $ref: "#/components/responses/Erro409"
+
+        "422":
+          $ref: "#/components/responses/Erro422"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+    delete:
+      tags:
+        - Cursos
+      summary: Excluir curso
+      responses:
+        "204":
+          description: Curso excluído com sucesso
+
+        "400":
+          $ref: "#/components/responses/Erro400"
+
+        "404":
+          $ref: "#/components/responses/Erro404"
+
+        "409":
+          $ref: "#/components/responses/Erro409"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+  /matriculas:
+    get:
+      tags:
+        - Matrículas
+      summary: Listar matrículas
+      parameters:
+        - name: cursoId
+          in: query
+          schema:
+            type: integer
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [ativa, cancelada]
+        - name: email
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Lista de matrículas
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Matricula"
+
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+    post:
+      tags:
+        - Matrículas
+      summary: Registrar matrícula após autorização do pagamento
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NovaMatricula"
+      responses:
+        "201":
+          description: Matrícula criada
+          headers:
+            Location:
+              description: Endereço da matrícula criada
+              schema:
+                type: string
+                example: /matriculas/3
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Matricula"
+        "404":
+          $ref: "#/components/responses/Erro404"
+        "409":
+          $ref: "#/components/responses/Erro409"
+        "422":
+          $ref: "#/components/responses/Erro422"
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+  /matriculas/{id}:
+    get:
+      tags:
+        - Matrículas
+      summary: Consultar matrícula por ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Matrícula encontrada
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Matricula"
+        "400":
+          $ref: "#/components/responses/Erro400"
+        "404":
+          $ref: "#/components/responses/Erro404"
+        "500":
+          $ref: "#/components/responses/Erro500"
+
+components:
+  schemas:
+    Curso:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        titulo:
+          type: string
+          example: Introdução ao JavaScript
+        descricao:
+          type: string
+          example: Fundamentos da linguagem JavaScript.
+        instrutor:
+          type: string
+          example: Ana Souza
+        categoria:
+          type: string
+          example: Programação
+        cargaHoraria:
+          type: integer
+          example: 20
+        status:
+          type: string
+          enum: [rascunho, publicado]
+          example: publicado
+      required:
+        - id
+        - titulo
+        - descricao
+        - instrutor
+        - categoria
+        - cargaHoraria
+        - status
+
+    NovoCurso:
+      type: object
+      properties:
+        titulo:
+          type: string
+        descricao:
+          type: string
+        instrutor:
+          type: string
+        categoria:
+          type: string
+        cargaHoraria:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [rascunho, publicado]
+          default: rascunho
+      required:
+        - titulo
+        - cargaHoraria
+
+    CursoCompleto:
+      type: object
+      properties:
+        titulo:
+          type: string
+        descricao:
+          type: string
+        instrutor:
+          type: string
+        categoria:
+          type: string
+        cargaHoraria:
+          type: integer
+          minimum: 1
+        status:
+          type: string
+          enum: [rascunho, publicado]
+      required:
+        - titulo
+        - descricao
+        - instrutor
+        - categoria
+        - cargaHoraria
+        - status
+
+    Paginacao:
+      type: object
+      properties:
+        pagina:
+          type: integer
+        limite:
+          type: integer
+        total:
+          type: integer
+        totalPaginas:
+          type: integer
+
+    Problema:
+      type: object
+      properties:
+        type:
+          type: string
+          example: about:blank
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - instance
+
+    Matricula:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        cursoId:
+          type: integer
+          example: 1
+        aluno:
+          type: string
+          example: Pedro Oliveira
+        email:
+          type: string
+          format: email
+          example: pedro@email.com
+        dataMatricula:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [ativa, cancelada]
+        pagamentoId:
+          type: string
+          example: MOCK-123456
+      required:
+        - id
+        - cursoId
+        - aluno
+        - email
+        - dataMatricula
+        - status
+        - pagamentoId
+
+    NovaMatricula:
+      type: object
+      required:
+        - cursoId
+        - aluno
+        - email
+      properties:
+        cursoId:
+          type: integer
+          minimum: 1
+        aluno:
+          type: string
+        email:
+          type: string
+          format: email
+
+  responses:
+    Erro400:
+      description: Requisição inválida
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+
+    Erro404:
+      description: Recurso não encontrado
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+
+    Erro409:
+      description: Conflito com recurso existente
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+
+    Erro422:
+      description: Dados enviados não passaram pela validação
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
+    Erro500:
+      description: Erro interno do servidor
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problema"
