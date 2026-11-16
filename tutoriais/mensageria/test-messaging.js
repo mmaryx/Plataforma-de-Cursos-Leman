@@ -1,49 +1,48 @@
+
 import { randomUUID } from 'node:crypto';
 import { publishEvent, publishRawMessage } from './publisher.js';
 
-const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function executarDemoMensageria() {
-    console.log('\n=== TESTE DA CAMADA DE MENSAGERIA - PLATAFORMA LEMAN ===\n');
+    console.log('\n=== TESTE DA MENSAGERIA - PLATAFORMA LEMAN ===\n');
 
-    // 1. Evento de curso publicado (só Auditoria deve receber; Notificações ignora)
-    const reqCurso = randomUUID();
+    const requestCurso = randomUUID();
+
     await publishEvent(
         'curso.publicado',
         { id: 10, titulo: 'Arquitetura Cloud na AWS', instrutor: 'Antônio Campello' },
-        { requestId: reqCurso }
+        { requestId: requestCurso }
     );
 
-    await esperar(400);
+    const requestMatricula = randomUUID();
 
-    // 2. Evento de matrícula confirmada (Notificações e Auditoria recebem)
-    const reqMatricula = randomUUID();
-    const eventoMatricula = await publishEvent(
+    const evento = await publishEvent(
         'matricula.confirmada',
         {
             id: 501,
             cursoId: 10,
-            aluno: 'Marianna Ghiraldelli',
-            email: 'marianna@leman.edu.br',
+            aluno: 'Aluno Teste Mensageria',
+            email: `mensageria.${Date.now()}@leman.edu.br`,
             pagamentoId: 'MOCK-998877'
         },
-        { requestId: reqMatricula }
+        { requestId: requestMatricula }
     );
 
-    await esperar(600);
+    await esperar(1000);
 
-    // 3. Teste de IDEMPOTÊNCIA: reenviando exatamente o mesmo eventId
-    console.log('\n--- Testando Idempotência (mesmo eventId enviado 2x) ---');
+    console.log('\n--- Idempotência: reenviando o mesmo eventId ---');
+
     await publishEvent(
         'matricula.confirmada',
-        eventoMatricula.dados,
-        { requestId: reqMatricula, eventId: eventoMatricula.eventId }
+        evento.dados,
+        { requestId: requestMatricula, eventId: evento.eventId }
     );
 
-    await esperar(600);
+    await esperar(1000);
 
-    // 4. Teste de RETRY + DLQ: falha persistente no envio de e-mail (3 tentativas -> leman.dlq)
-    console.log('\n--- Testando Falha Persistente (3 tentativas -> leman.dlq) ---');
+    console.log('\n--- Retry limitado: falha simulada até DLQ ---');
+
     await publishEvent(
         'matricula.confirmada',
         {
@@ -56,16 +55,20 @@ async function executarDemoMensageria() {
         { requestId: randomUUID() }
     );
 
-    await esperar(1200);
+    await esperar(1800);
 
-    // 5. Teste de MENSAGEM MALFORMADA -> vai direto para leman.dlq
-    console.log('\n--- Testando Payload Malformado (-> leman.dlq) ---');
-    await publishRawMessage('matricula.cancelada', '{ json-quebrado-sem-fechar', randomUUID());
+    console.log('\n--- Payload inválido: encaminhamento para DLQ ---');
 
-    console.log('\n=== EVENTOS DISPARADOS! Confira os logs dos consumidores e o painel http://localhost:15672 ===\n');
+    await publishRawMessage(
+        'matricula.cancelada',
+        '{ json-quebrado-sem-fechar',
+        randomUUID()
+    );
+
+    console.log('\nEventos publicados. Confira os logs dos consumidores e a fila leman.dlq.');
 }
 
 executarDemoMensageria().catch((erro) => {
-    console.error('Erro no teste de mensageria:', erro);
+    console.error('\n✗ FALHA NO TESTE DE MENSAGERIA:', erro);
     process.exitCode = 1;
 });
