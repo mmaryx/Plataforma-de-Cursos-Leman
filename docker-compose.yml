@@ -1,4 +1,3 @@
-
 services:
   mysql:
     image: mysql:8.4
@@ -13,6 +12,20 @@ services:
       - "3307:3306"
     volumes:
       - leman_mysql_data:/var/lib/mysql
+      - ./tutoriais/rest/database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./tutoriais/rest/database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: leman-rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - leman_rabbitmq_data:/var/lib/rabbitmq
 
 volumes:
   leman_mysql_data:
+  leman_rabbitmq_data:
