@@ -5,7 +5,7 @@ import pool from './database.js';
 import { publishEvent } from '../../mensageria/publisher.js';
 
 const app = express();
-const HOST = process.env.HOST || '127.0.0.1';
+const HOST = process.env.HOST || process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 3001);
 
 app.use(express.json());
